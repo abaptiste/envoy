@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package envoy.config.filter.udp.dns_filter.v2alpha;
+
+import "google/protobuf/duration.proto";
+
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.filter.udp.dns_filter.v2alpha";
+option java_outer_classname = "DnsFilterProto";
+option java_multiple_files = true;
+
+// Configuration for the DNS filter.
+message DnsFilterConfig {
+  message DnsVirtualDomain {
+    // The domain name for which Envoy will respond to query requests
+    string name = 1;
+
+    // A list of IP addresses Envoy returns to queries for the given domain
+    repeated string address = 2;
+  }
+
+  message DnsFilterServerConfig {
+    uint32 retry_count = 1;
+
+    // Fully qualified domain names for which Envoy will respond to queries
+    repeated DnsVirtualDomain virtual_domains = 2 [(validate.rules).repeated = {min_items: 1}];
+  }
+
+  message DnsFilterClientConfig {
+    // Enable forwarding of the query to an upstream DNS server
+    bool forward_query = 1;
+
+    // Timeout for making a DNS query to any of the configured resolvers
+    google.protobuf.Duration dns_query_timeout = 2 [(validate.rules).duration = {gt {}}];
+
+    // A list of DNS servers to which we can forward queries
+    repeated string upstream_resolvers = 3 [(validate.rules).repeated = {min_items: 1}];
+  }
+
+  // The stat prefix used when emitting DNS filter stats.
+  string stat_prefix = 1 [(validate.rules).string = {min_bytes: 1}];
+
+  // Filter DNS Client Configuration
+  DnsFilterClientConfig client_config = 2;
+
+  // Filter DNS Server Configuration
+  DnsFilterServerConfig server_config = 3;
+}
