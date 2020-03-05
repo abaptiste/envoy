@@ -19,6 +19,7 @@ DnsProxyFilterConfig::DnsProxyFilterConfig(
   for (const auto& virtual_domain : config.server_config().virtual_domains()) {
     DnsAddressList addresses{};
 
+    addresses.reserve(virtual_domain.address().size());
     for (const auto& configured_address : virtual_domain.address()) {
       addresses.push_back(configured_address);
     }
@@ -59,6 +60,9 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
   const DnsVirtualDomainConfig& domains = config_->domains();
 
   for (const auto& rec : queries) {
+
+    // TODO: If we have a sufficiently large set of domains, we should
+    //       use a binary search.
     const auto iter = domains.find(rec->name_);
     if (iter == domains.end()) {
       ENVOY_LOG(debug, "Domain [{}] is not a configured entry", rec->name_);
@@ -74,7 +78,7 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
     // TODO: Verify the address class is the same as the query
 
     size_t index = rng_.random() % configured_address_list.size();
-    const std::string& address = configured_address_list.at(index);
+    const std::string& address = configured_address_list[index];
     ENVOY_LOG(debug, "returning address {} for domain [{}]", address, rec->name_);
 
     size_t address_size;
@@ -83,7 +87,7 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
       address_size = 16;
       break;
     case 1: // A
-			// intentional fallthrough
+            // intentional fallthrough
     default:
       address_size = 4;
     }

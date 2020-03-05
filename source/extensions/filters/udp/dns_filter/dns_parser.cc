@@ -36,7 +36,7 @@ inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::Instan
   ENVOY_LOG_MISC(trace, "{}\n{}", title, buf);
 }
 
-inline void DnsObject::dumpFlags(const dns_query_t& queryObj) {
+inline void DnsObject::dumpFlags(const DnsHostRecord& queryObj) {
   std::stringstream ss{};
 
   ss << "Query ID: 0x" << std::hex << queryObj.id << "\n";

@@ -14,7 +14,7 @@ namespace DnsFilter {
 // does not match the RFC, but takes byte ordering
 // into account so that serialization/deserialization
 // requires no and-ing or shifting.
-typedef struct __attribute__((packed)) dns_query_flags_s {
+PACKED_STRUCT(struct dns_query_flags_s {
   unsigned rcode : 4;  // return code
   unsigned cd : 1;     // checking disabled
   unsigned ad : 1;     // authenticated data
@@ -25,9 +25,11 @@ typedef struct __attribute__((packed)) dns_query_flags_s {
   unsigned aa : 1;     // authoritiative answer
   unsigned opcode : 4; // operation code
   unsigned qr : 1;     // query or response
-} dns_query_flags_t;
+});
 
-typedef struct __attribute__((packed)) dns_query_s {
+using dns_query_flags_t = struct dns_query_flags_s;
+
+PACKED_STRUCT(struct dns_query_s {
   uint16_t id;
   union {
     uint16_t val;
@@ -37,7 +39,9 @@ typedef struct __attribute__((packed)) dns_query_s {
   uint16_t answers;
   uint16_t authority_rrs;
   uint16_t additional_rrs;
-} dns_query_t;
+});
+
+using DnsHostRecord = struct dns_query_s;
 
 enum class DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
 
@@ -45,13 +49,13 @@ class DnsObject {
 
 public:
   DnsObject() {}
-  dns_query_t query_;
-  dns_query_t response_;
+  DnsHostRecord query_;
+  DnsHostRecord response_;
 
 protected:
   void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                   const uint64_t offset = 0);
-  void dumpFlags(const dns_query_t& queryObj);
+  void dumpFlags(const DnsHostRecord& queryObj);
 };
 
 // BaseDnsRecord class containing the domain name operated on, its class, and address type

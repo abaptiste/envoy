@@ -14,20 +14,27 @@ option java_multiple_files = true;
 message DnsFilterConfig {
   message DnsVirtualDomain {
     // The domain name for which Envoy will respond to query requests
-    string name = 1;
+    string name = 1 [(validate.rules).string = {min_bytes: 2}];
 
     // A list of IP addresses Envoy returns to queries for the given domain
-    repeated string address = 2;
+    repeated string address = 2 [(validate.rules).repeated = {min_items: 1}];
   }
 
-  message DnsFilterServerConfig {
+  // This message contains the configuration for the Dns Filter operating
+  // in a server context.  This message will contain the virtual hosts and
+  // associated addresses with which Envoy will respond to queries
+  message ServerCtxConfig {
     uint32 retry_count = 1;
 
     // Fully qualified domain names for which Envoy will respond to queries
     repeated DnsVirtualDomain virtual_domains = 2 [(validate.rules).repeated = {min_items: 1}];
   }
 
-  message DnsFilterClientConfig {
+  // This message contains the configuration for the Dns Filter operating
+  // in a client context.  This message will contain the timeouts, retry,
+  // and forwarding configuration for Envoy to make DNS reqeusts to other
+  // resolvers
+  message ClientCtxConfig {
     // Enable forwarding of the query to an upstream DNS server
     bool forward_query = 1;
 
@@ -41,9 +48,9 @@ message DnsFilterConfig {
   // The stat prefix used when emitting DNS filter stats.
   string stat_prefix = 1 [(validate.rules).string = {min_bytes: 1}];
 
-  // Filter DNS Client Configuration
-  DnsFilterClientConfig client_config = 2;
+  // Server context configuration
+  ServerCtxConfig server_config = 2;
 
-  // Filter DNS Server Configuration
-  DnsFilterServerConfig server_config = 3;
+  // Client context configuration
+  ClientCtxConfig client_config = 3;
 }
