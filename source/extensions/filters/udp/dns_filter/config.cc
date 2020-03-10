@@ -7,7 +7,7 @@ namespace DnsFilter {
 
 Network::UdpListenerFilterFactoryCb DnsFilterConfigFactory::createFilterFactoryFromProto(
     const Protobuf::Message& config, Server::Configuration::ListenerFactoryContext& context) {
-  auto shared_config = std::make_shared<DnsProxyFilterConfig>(
+  auto shared_config = std::make_shared<DnsProxyEnvoyConfig>(
       context, MessageUtil::downcastAndValidate<
                    const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig&>(
                    config, context.messageValidationVisitor()));

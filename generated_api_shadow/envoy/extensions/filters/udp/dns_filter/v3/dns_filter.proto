@@ -1,23 +1,22 @@
 syntax = "proto3";
 
-package envoy.config.filter.udp.dns_filter.v2alpha;
+package envoy.extensions.filters.udp.dns_filter.v3;
 
 import "google/protobuf/duration.proto";
 
-import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
 
-import "udpa/annotations/migrate.proto";
 import "validate/validate.proto";
 
-option java_package = "io.envoyproxy.envoy.config.filter.udp.dns_filter.v2alpha";
+option java_package = "io.envoyproxy.envoy.extensions.filters.udp.dns_filter.v3";
 option java_outer_classname = "DnsFilterProto";
 option java_multiple_files = true;
-option (udpa.annotations.file_migrate).move_to_package =
-    "envoy.extensions.filters.udp.dns_filter.v3";
-option (udpa.annotations.file_status).work_in_progress = true;
 
 // Configuration for the DNS filter.
 message DnsFilterConfig {
+  option (udpa.annotations.versioning).previous_message_type =
+      "envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig";
+
   // Specify the method of determining the address of a given endpoint
   enum EndpointType { STATIC = 0; }
 
@@ -25,6 +24,9 @@ message DnsFilterConfig {
   // or dictate some other method for resolving the addresses for an
   // endpoint
   message DnsEndpoint {
+    option (udpa.annotations.versioning).previous_message_type =
+        "envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig.DnsEndpoint";
+
     EndpointType type = 1;
 
     // A list of IP addresses Envoy returns to queries for the given domain
@@ -32,6 +34,9 @@ message DnsFilterConfig {
   }
 
   message DnsVirtualDomain {
+    option (udpa.annotations.versioning).previous_message_type =
+        "envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig.DnsVirtualDomain";
+
     // The domain name for which Envoy will respond to query requests
     string name = 1 [(validate.rules).string = {min_len: 2}];
 
@@ -44,6 +49,9 @@ message DnsFilterConfig {
   // in a server context.  This message will contain the virtual hosts and
   // associated addresses with which Envoy will respond to queries
   message ServerCtxConfig {
+    option (udpa.annotations.versioning).previous_message_type =
+        "envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig.ServerCtxConfig";
+
     uint32 retry_count = 1;
 
     // Fully qualified domain names for which Envoy will respond to queries
@@ -61,6 +69,9 @@ message DnsFilterConfig {
   // and forwarding configuration for Envoy to make DNS reqeusts to other
   // resolvers
   message ClientCtxConfig {
+    option (udpa.annotations.versioning).previous_message_type =
+        "envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig.ClientCtxConfig";
+
     // Enable forwarding of the query to an upstream DNS server
     bool forward_query = 1;
 

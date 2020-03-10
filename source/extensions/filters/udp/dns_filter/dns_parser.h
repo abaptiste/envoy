@@ -9,6 +9,13 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
+namespace {
+template <typename Enumeration>
+auto as_integer(Enumeration const value) -> typename std::underlying_type<Enumeration>::type {
+  return static_cast<typename std::underlying_type<Enumeration>::type>(value);
+}
+} // namespace
+
 // The flags have been verified with dig and this
 // structure should not be modified.  The flag order
 // does not match the RFC, but takes byte ordering
@@ -41,22 +48,11 @@ PACKED_STRUCT(struct dns_query_s {
   uint16_t additional_rrs;
 });
 
-using DnsHostRecord = struct dns_query_s;
+using DnsMessageStruct = struct dns_query_s;
 
+enum DnsRecordClass { IN = 1 };
+enum DnsRecordType { A = 1, CNAME = 5, AAAA = 28 };
 enum class DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
-
-class DnsObject {
-
-public:
-  DnsObject() {}
-  DnsHostRecord query_;
-  DnsHostRecord response_;
-
-protected:
-  void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
-                  const uint64_t offset = 0);
-  void dumpFlags(const DnsHostRecord& queryObj);
-};
 
 // BaseDnsRecord class containing the domain name operated on, its class, and address type
 // Since this is IP based the class is almost always 1 (INET), the type varies betweeen
@@ -121,35 +117,50 @@ enum class DnsQueryParseState {
   FINISH
 };
 
-class DnsQueryParser : DnsObject, Logger::Loggable<Logger::Id::filter> {
+class DnsObject {
+
 public:
-  DnsQueryParser() : queries(), answers() {}
-  virtual ~DnsQueryParser() {}
+  DnsObject() : queries_(), answers_() {}
+  virtual ~DnsObject(){};
 
-  virtual bool parseQueryData(const Buffer::InstancePtr& buffer);
-  virtual DnsQueryList& getQueries() { return queries; };
+  bool parseDnsObject(const Buffer::InstancePtr& buffer);
+  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
+  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
+  const DnsQueryList& getQueries() { return queries_; }
+  const DnsAnswerList& getAnswers() { return answers_; }
 
+  uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.f.flags.rcode); }
+  uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.f.flags.rcode); }
+
+  void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
+                  const uint64_t offset = 0);
+  void dumpFlags(const DnsMessageStruct& queryObj);
+
+  DnsMessageStruct incoming_;
+  DnsMessageStruct generated_;
+
+  DnsQueryList queries_;
+  DnsAnswerList answers_;
+
+private:
+  const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
+                                       uint64_t* name_offset);
+};
+
+class DnsQueryParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
+public:
   virtual bool buildResponseBuffer(Buffer::OwnedImpl& buffer, DnsAnswerRecordPtr& answer_rec);
 
 private:
-  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
   void setDnsResponseFlags();
-
-  DnsQueryList queries;
-  DnsAnswerList answers;
 };
 
 using DnsQueryParserPtr = std::unique_ptr<DnsQueryParser>;
 
-class DnsResponseParser : DnsObject, Logger::Loggable<Logger::Id::filter> {
+class DnsResponseParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
 
 public:
-  DnsResponseParser() {}
-  virtual ~DnsResponseParser() {}
-
   virtual bool parseResponseData(const Buffer::InstancePtr& buffer);
-
-private:
 };
 
 using DnsResponseParserPtr = std::unique_ptr<DnsResponseParser>;

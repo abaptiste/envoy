@@ -7,10 +7,12 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-DnsProxyFilterConfig::DnsProxyFilterConfig(
+DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config)
     : root_scope(context.scope()), stats_(generateStats(config.stat_prefix(), root_scope)) {
+
+  using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
   // store configured data for server context
   const size_t entries = config.server_config().virtual_domains().size();
@@ -19,10 +21,13 @@ DnsProxyFilterConfig::DnsProxyFilterConfig(
   for (const auto& virtual_domain : config.server_config().virtual_domains()) {
     DnsAddressList addresses{};
 
-    addresses.reserve(virtual_domain.address().size());
-    for (const auto& configured_address : virtual_domain.address()) {
-      addresses.push_back(configured_address);
+    if (virtual_domain.endpoint().type() == DnsFilterConfig::STATIC) {
+      addresses.reserve(virtual_domain.endpoint().address().size());
+      for (const auto& configured_address : virtual_domain.endpoint().address()) {
+        addresses.push_back(configured_address);
+      }
     }
+
     virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addresses));
   }
 
@@ -30,21 +35,27 @@ DnsProxyFilterConfig::DnsProxyFilterConfig(
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
+  // TODO: Error handling
+
+  answer_rec_.release();
 
   // Parse the query
-  query_parser_->parseQueryData(client_request.buffer_);
+  if (!query_parser_->parseDnsObject(client_request.buffer_)) {
+    sendDnsResponse(client_request);
+    return;
+  }
 
   // Determine if the hostname is known
-  DnsAnswerRecordPtr response_rec = getResponseForQuery();
+  answer_rec_ = getResponseForQuery();
   ENVOY_LOG(trace, "Parsed address for query: {}",
-            response_rec != nullptr ? response_rec->address_ : "None");
+            answer_rec_ != nullptr ? answer_rec_->address_ : "None");
 
   // TODO:
   // Determine whether we should upstream the query
   // if not, return a response to the client
 
   // return to client
-  sendDnsResponse(client_request, response_rec);
+  sendDnsResponse(client_request);
 }
 
 DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
@@ -81,30 +92,39 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
     const std::string& address = configured_address_list[index];
     ENVOY_LOG(debug, "returning address {} for domain [{}]", address, rec->name_);
 
-    size_t address_size;
-    switch (rec->class_) {
-    case 0x28: // AAAA
+    size_t address_size = 0;
+    DnsAnswerRecordPtr answer_rec = nullptr;
+
+    switch (rec->type_) {
+    case DnsRecordType::AAAA:
       address_size = 16;
       break;
-    case 1: // A
-            // intentional fallthrough
-    default:
+    case DnsRecordType::A:
       address_size = 4;
+      break;
+    case DnsRecordType::CNAME:
+      ENVOY_LOG(debug, "CNAME types not yet supported");
+      break;
     }
 
-    DnsAnswerRecordPtr answer_rec = std::make_unique<DnsAnswerRecord>(
-        rec->name_, rec->type_, rec->class_, 300 /*ttl*/, address_size /*Address size*/, address);
+    if (!address_size) {
+      ENVOY_LOG(error, "Unable to determine the address size for record type [{}] for address [{}]",
+                rec->type_, address);
+      return nullptr;
+    }
+
+    answer_rec = std::make_unique<DnsAnswerRecord>(rec->name_, rec->type_, rec->class_, 300 /*ttl*/,
+                                                   address_size /*Address size*/, address);
     return answer_rec;
   }
 
   return nullptr;
 }
 
-void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data,
-                                DnsAnswerRecordPtr& answer_record) {
+void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data) {
 
   Buffer::OwnedImpl response{};
-  (void)query_parser_->buildResponseBuffer(response, answer_record);
+  (void)query_parser_->buildResponseBuffer(response, answer_rec_);
 
   ENVOY_LOG(debug, "Sending response from: {} to: {}",
             request_data.addresses_.local_->asStringView(),

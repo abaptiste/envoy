@@ -16,11 +16,11 @@ envoy_cc_library(
     deps = [
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:file_event_interface",
-        "//include/envoy/event:timer_interface",
         "//include/envoy/network:address_interface",
         "//include/envoy/network:filter_interface",
         "//include/envoy/network:listener_interface",
         "//source/common/buffer:buffer_lib",
+        "//source/common/common:empty_string",
         "//source/common/config:config_provider_lib",
         "//source/common/network:address_lib",
         "//source/common/network:utility_lib",

@@ -40,9 +40,9 @@ struct DnsProxyFilterStats {
 using DnsAddressList = std::vector<std::string>;
 using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, DnsAddressList>;
 
-class DnsProxyFilterConfig {
+class DnsFilterEnvoyConfig {
 public:
-  DnsProxyFilterConfig(
+  DnsFilterEnvoyConfig(
       Server::Configuration::ListenerFactoryContext& context,
       const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config);
 
@@ -60,11 +60,11 @@ private:
   DnsVirtualDomainConfig virtual_domains_;
 };
 
-using DnsProxyFilterConfigSharedPtr = std::shared_ptr<const DnsProxyFilterConfig>;
+using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
 
 class DnsFilter : public Network::UdpListenerReadFilter, Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsFilter(Network::UdpReadFilterCallbacks& callbacks, const DnsProxyFilterConfigSharedPtr& config)
+  DnsFilter(Network::UdpReadFilterCallbacks& callbacks, const DnsFilterEnvoyConfigSharedPtr& config)
       : UdpListenerReadFilter(callbacks), config_(config),
         query_parser_(std::make_unique<DnsQueryParser>()),
         response_parser_(std::make_unique<DnsResponseParser>()),
@@ -76,14 +76,15 @@ public:
 
 
 private:
-  void sendDnsResponse(const Network::UdpRecvData& request_data, DnsAnswerRecordPtr& answer_record);
+  void sendDnsResponse(const Network::UdpRecvData& request_data);
   DnsAnswerRecordPtr getResponseForQuery();
 
-  const DnsProxyFilterConfigSharedPtr config_;
+  const DnsFilterEnvoyConfigSharedPtr config_;
   DnsQueryParserPtr query_parser_;
   DnsResponseParserPtr response_parser_;
   Network::UdpListener& listener_;
 	Runtime::RandomGeneratorImpl rng_;
+  DnsAnswerRecordPtr answer_rec_;
 };
 
 } // namespace DnsFilter
