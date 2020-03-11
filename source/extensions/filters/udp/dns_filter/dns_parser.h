@@ -1,8 +1,10 @@
 #pragma once
 
-#include "common/buffer/buffer_impl.h"
 #include "envoy/buffer/buffer.h"
+#include "envoy/network/address.h"
 #include "envoy/network/listener.h"
+
+#include "common/buffer/buffer_impl.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -17,7 +19,7 @@ auto as_integer(Enumeration const value) -> typename std::underlying_type<Enumer
 } // namespace
 
 // The flags have been verified with dig and this
-// structure should not be modified.  The flag order
+// structure should not be modified. The flag order
 // does not match the RFC, but takes byte ordering
 // into account so that serialization/deserialization
 // requires no and-ing or shifting.
@@ -29,7 +31,7 @@ PACKED_STRUCT(struct dns_query_flags_s {
   unsigned ra : 1;     // recursion available
   unsigned rd : 1;     // recursion desired
   unsigned tc : 1;     // truncated response
-  unsigned aa : 1;     // authoritiative answer
+  unsigned aa : 1;     // authoritative answer
   unsigned opcode : 4; // operation code
   unsigned qr : 1;     // query or response
 });
@@ -51,11 +53,11 @@ PACKED_STRUCT(struct dns_query_s {
 using DnsMessageStruct = struct dns_query_s;
 
 enum DnsRecordClass { IN = 1 };
-enum DnsRecordType { A = 1, CNAME = 5, AAAA = 28 };
+enum DnsRecordType { A = 1, AAAA = 28 };
 enum class DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
 
 // BaseDnsRecord class containing the domain name operated on, its class, and address type
-// Since this is IP based the class is almost always 1 (INET), the type varies betweeen
+// Since this is IP based the class is almost always 1 (INET), the type varies between
 // A and AAAA queries
 class BaseDnsRecord {
 public:
@@ -91,16 +93,14 @@ using DnsQueryList = std::list<DnsQueryRecordPtr>;
 class DnsAnswerRecord : public BaseDnsRecord {
 public:
   DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
-                  const uint32_t ttl, const uint16_t data_length, const std::string& address)
-      : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), data_length_(data_length),
-        address_(address) {}
+                  const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr)
+      : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
   virtual ~DnsAnswerRecord() {}
   virtual Buffer::OwnedImpl& serialize();
 
   const uint32_t ttl_;
-  const uint16_t data_length_;
-  const std::string address_;
+  Network::Address::InstanceConstSharedPtr ip_addr_;
 };
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;

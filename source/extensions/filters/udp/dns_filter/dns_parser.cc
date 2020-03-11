@@ -1,3 +1,5 @@
+#include "extensions/filters/udp/dns_filter/dns_parser.h"
+
 #include <iomanip>
 #include <sstream>
 
@@ -7,8 +9,6 @@
 #include "common/network/address_impl.h"
 #include "common/network/utility.h"
 
-#include "extensions/filters/udp/dns_filter/dns_parser.h"
-
 namespace Envoy {
 namespace Extensions {
 namespace UdpFilters {
@@ -16,12 +16,13 @@ namespace DnsFilter {
 
 inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                                   const uint64_t offset) {
+
+  // TODO: We should do no work if the log level is not applicable
   const uint64_t data_length = buffer->length();
   unsigned char buf[1024] = {};
   unsigned char c;
-  char* p = nullptr;
 
-  p = reinterpret_cast<char*>(buf);
+  char* p = reinterpret_cast<char*>(buf);
 
   for (uint64_t i = offset; i < data_length; i++) {
     if (i && ((i - offset) % 16 == 0)) {
@@ -34,6 +35,8 @@ inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::Instan
 }
 
 inline void DnsObject::dumpFlags(const DnsMessageStruct& queryObj) {
+
+  // TODO: We should do no work if the log level is not applicable
   std::stringstream ss{};
 
   ss << "Query ID: 0x" << std::hex << queryObj.id << "\n";
@@ -60,8 +63,10 @@ inline void DnsObject::dumpFlags(const DnsMessageStruct& queryObj) {
 
 inline void BaseDnsRecord::serializeName() {
 
-  // This function iterates over a name eg. "www.foo1.com"
-  // once and produces a buffer containing 3www4foo13com<nullbyte>
+  // This function iterates over a name e.g. "www.domain.com"
+  // once and produces a buffer containing the segment size, followed
+  // by the segment data. The buffer is then terminated with a
+  // null byte
 
   size_t last = 0;
   size_t count = name_.find_first_of('.');
@@ -76,13 +81,13 @@ inline void BaseDnsRecord::serializeName() {
       ++iter;
     }
 
-    // periods are not serialized.  Skip to the next character
+    // periods are not serialized. Skip to the next character
     if (*iter == '.') {
       ++iter;
     }
 
     // Move our last marker to the next character
-    // after where we stopped.  Search for the next
+    // after where we stopped. Search for the next
     // name separator
     last += count;
     ++last;
@@ -101,10 +106,7 @@ inline void BaseDnsRecord::serializeName() {
   buffer_.writeByte(0x00);
 }
 
-// TODO: How do we know that this worked?
 Buffer::OwnedImpl& DnsQueryRecord::serialize() {
-  // TODO: Reuse the existing serialized query.
-
   buffer_.drain(buffer_.length());
 
   serializeName();
@@ -118,20 +120,30 @@ Buffer::OwnedImpl& DnsAnswerRecord::serialize() {
   buffer_.drain(buffer_.length());
 
   serializeName();
-
   buffer_.writeBEInt<uint16_t>(type_);
   buffer_.writeBEInt<uint16_t>(class_);
   buffer_.writeBEInt<uint32_t>(ttl_);
 
   // Convert address and serialize
-  auto address_ptr = Network::Utility::parseInternetAddress(address_, 0, false);
-  auto ip_address = address_ptr->ip();
+  if (ip_addr_ == nullptr) {
+    // do what?
+    ENVOY_LOG_MISC(error, "Invalid address pointer when serializing record");
+    return buffer_;
+  }
 
-  if (ip_address->ipv6() != nullptr && data_length_ == 16) {
-    buffer_.writeBEInt<uint16_t>(data_length_);
-    buffer_.writeLEInt<uint32_t>(ip_address->ipv4()->address());
-  } else if (ip_address->ipv4() != nullptr && data_length_ == 4) {
-    buffer_.writeBEInt<uint16_t>(data_length_);
+  const auto ip_address = ip_addr_->ip();
+
+  if (ip_address->ipv6() != nullptr) {
+
+    // Store the 128bit address with 2 64 bit writes
+    const absl::uint128 addr6 = ip_address->ipv6()->address();
+
+    buffer_.writeBEInt<uint16_t>(sizeof(addr6));
+    buffer_.writeLEInt<uint64_t>(absl::Uint128Low64(addr6));
+    buffer_.writeLEInt<uint64_t>(absl::Uint128High64(addr6));
+
+  } else if (ip_address->ipv4() != nullptr) {
+    buffer_.writeBEInt<uint16_t>(4);
     buffer_.writeLEInt<uint32_t>(ip_address->ipv4()->address());
   }
 
@@ -156,20 +168,20 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   while (state_ != DnsQueryParseState::FINISH) {
 
-    // Ensure that we have enough data remaining in the buffer
-    // to parse the query
+    // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
       ENVOY_LOG_MISC(error,
-                     "Exhausted available bytes in the buffer.  Insufficient data to parse query");
+                     "Exhausted available bytes in the buffer. Insufficient data to parse query");
       return false;
     }
 
+    // Each of the control fields is 2 bytes wide.
     data = buffer->peekBEInt<uint16_t>(offset);
     offset += field_size;
     available_bytes -= field_size;
 
     if (offset > buffer->length()) {
-      ENVOY_LOG_MISC(error, "Exhausted available bytes in the buffer.  Unable to parse query");
+      ENVOY_LOG_MISC(error, "Exhausted available bytes in the buffer. Unable to parse query");
       return false;
     }
 
@@ -213,17 +225,18 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
     }
   }
 
+  // Verify that we still have available data in the buffer to read
+  // answer and query records
   if (offset > buffer->length()) {
-    ENVOY_LOG_MISC(error, "Data offset[{}] is larget than buffer size[{}].  Returning false",
-                   offset, buffer->length());
+    ENVOY_LOG_MISC(error, "Data offset[{}] is larget than buffer size[{}]. Returning false", offset,
+                   buffer->length());
     return false;
   }
 
   // DEBUG
   dumpFlags(incoming_);
 
-  // Most time we will have only one query here.
-  // TODO: Validate this and handle the case where more than one query is present
+  // Most times we will have only one query here.
   for (uint16_t index = 0; index < incoming_.questions; index++) {
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
@@ -233,6 +246,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
     queries_.push_back(std::move(rec));
   }
 
+  // Parse all answer records and store them
   for (uint16_t index = 0; index < incoming_.answers; index++) {
     auto rec = parseDnsAnswerRecord(buffer, &offset);
     if (rec == nullptr) {
@@ -257,8 +271,8 @@ const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffe
     *available_bytes -= sizeof(unsigned char);
 
     if (c == 0xc0) {
-      // This is a compressed response.  Get the offset in the query record
-      // of the response where the domain name begins
+      // This is a compressed response. Get the offset in the query record
+      // where the domain name begins
       c = buffer->peekBEInt<unsigned char>(*name_offset);
 
       // We will restart the loop from this offset and read until we encounter
@@ -356,41 +370,41 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
     return nullptr;
   }
 
-  std::string address{};
+  // TODO: Build an
+  Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
-  if (record_type == DnsRecordType::CNAME) {
-    address = parseDnsNameRecord(buffer, &available_bytes, &data_offset);
-  } else if (record_type == DnsRecordType::A) {
-    sockaddr_in address4;
-    address4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
+  if (record_type == DnsRecordType::A) {
+    sockaddr_in sa4;
+    sa4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
 
-    address = Network::Address::Ipv4Instance::sockaddrToString(address4);
+    ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
 
   } else if (record_type == DnsRecordType::AAAA) {
 
-    sockaddr_in6 address6;
-    uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&address6.sin6_addr.s6_addr);
+    sockaddr_in6 sa6;
+    uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
     for (size_t index = 0; index < sizeof(absl::uint128) / sizeof(uint8_t); index++) {
       *address6_bytes++ = buffer->peekLEInt<uint8_t>(data_offset++);
     }
 
-    Network::Address::Ipv6Instance ip6(address6);
-    address = ip6.ip()->addressAsString();
+    ip_addr = std::make_shared<Network::Address::Ipv6Instance>(sa6, true);
   }
+
   data_offset += data_length;
 
-  ENVOY_LOG_MISC(debug, "Parsed address [{}] from record type [{}]", address, record_type);
+  ENVOY_LOG_MISC(debug, "Parsed address [{}] from record type [{}]",
+                 ip_addr->ip()->addressAsString(), record_type);
 
-  if (address.empty()) {
+  // If we don't have either cname or an ip address, it's likely an unsupported record
+  if (ip_addr == nullptr) {
     ENVOY_LOG_MISC(error, "Could not parse address from record");
     return nullptr;
   }
 
   *offset = data_offset;
 
-  auto rec = std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl,
-                                               data_length, address);
-
+  auto rec =
+      std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl, ip_addr);
   return rec;
 }
 
@@ -474,7 +488,7 @@ void DnsQueryParser::setDnsResponseFlags() {
   // Set the number of questions we are responding to
   generated_.questions = incoming_.questions;
 
-  // We will not include any additionl records
+  // We will not include any additional records
   generated_.authority_rrs = 0;
   generated_.additional_rrs = 0;
 
@@ -489,7 +503,8 @@ bool DnsQueryParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
 
   // Build the response and send it on the connection
   ENVOY_LOG(debug, "In {} with address [{}]", __func__,
-            answer_record != nullptr ? answer_record->address_ : "Nothing");
+            answer_record != nullptr ? answer_record->ip_addr_->ip()->addressAsString()
+                                     : "Nothing");
 
   answers_.clear();
   if (answer_record != nullptr) {
@@ -511,9 +526,9 @@ bool DnsQueryParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
   // Copy the query that we are answering into to the response
 
   // TODO: Find a way to copy this from the original buffer so that we aren't
-  // reserializing the data.  We do this for a couple reasons.  Pointer ownership
+  // re-serializing the data. We do this for a couple reasons. Pointer ownership
   // gets a bit hairy when trying to store an offset and a pointer to the original
-  // buffer.   Secondly, if there are additional records in the original query
+  // buffer. Secondly, if there are additional records in the original query
   // we aren't parsing those, so we don't know the complete length of the query.
   if (!queries_.empty()) {
     buffer_.add(queries_.front()->serialize());

@@ -2,6 +2,8 @@
 
 #include "envoy/network/listener.h"
 
+#include "common/network/address_impl.h"
+
 namespace Envoy {
 namespace Extensions {
 namespace UdpFilters {
@@ -15,20 +17,29 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
   // store configured data for server context
-  const size_t entries = config.server_config().virtual_domains().size();
+  const auto& server_config = config.server_config();
 
-  virtual_domains_.reserve(entries);
-  for (const auto& virtual_domain : config.server_config().virtual_domains()) {
-    DnsAddressList addresses{};
+  if (server_config.has_control_plane_cfg()) {
 
-    if (virtual_domain.endpoint().type() == DnsFilterConfig::STATIC) {
-      addresses.reserve(virtual_domain.endpoint().address().size());
-      for (const auto& configured_address : virtual_domain.endpoint().address()) {
-        addresses.push_back(configured_address);
+    const auto& cfg = server_config.control_plane_cfg();
+    const size_t entries = cfg.virtual_domains().size();
+
+    virtual_domains_.reserve(entries);
+    for (const auto& virtual_domain : cfg.virtual_domains()) {
+      DnsAddressList addresses{};
+
+      if (virtual_domain.endpoint().has_addresslist()) {
+        const auto& address_list = virtual_domain.endpoint().addresslist().address();
+        addresses.reserve(address_list.size());
+        for (const auto& configured_address : address_list) {
+          // This will throw an exception if the configured_address string is malformed
+          const auto ipaddr = Network::Utility::parseInternetAddress(configured_address, 0, true);
+          addresses.push_back(ipaddr);
+        }
       }
-    }
 
-    virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addresses));
+      virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addresses));
+    }
   }
 
   // TODO: store configured data for client context
@@ -48,13 +59,11 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   // Determine if the hostname is known
   answer_rec_ = getResponseForQuery();
   ENVOY_LOG(trace, "Parsed address for query: {}",
-            answer_rec_ != nullptr ? answer_rec_->address_ : "None");
+            answer_rec_ != nullptr ? answer_rec_->ip_addr_->ip()->addressAsString() : "None");
 
-  // TODO:
-  // Determine whether we should upstream the query
-  // if not, return a response to the client
+  // TODO: Determine whether we should send the query to a different server
 
-  // return to client
+  // respond to client
   sendDnsResponse(client_request);
 }
 
@@ -63,17 +72,17 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
   const auto& queries = query_parser_->getQueries();
 
   // It appears to be a rare case where we would have more than
-  // one query in a single request.  It is allowed by the protocol
+  // one query in a single request. It is allowed by the protocol
   // but not widely supported:
   //
   // https://stackoverflow.com/a/4083071
 
-  const DnsVirtualDomainConfig& domains = config_->domains();
+  const auto& domains = config_->domains();
 
   for (const auto& rec : queries) {
 
-    // TODO: If we have a sufficiently large set of domains, we should
-    //       use a binary search.
+    // TODO: If we have a sufficiently large ( > 100) list of domains, we should use a binary
+    // search.
     const auto iter = domains.find(rec->name_);
     if (iter == domains.end()) {
       ENVOY_LOG(debug, "Domain [{}] is not a configured entry", rec->name_);
@@ -86,36 +95,33 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
       return nullptr;
     }
 
-    // TODO: Verify the address class is the same as the query
-
-    size_t index = rng_.random() % configured_address_list.size();
-    const std::string& address = configured_address_list[index];
-    ENVOY_LOG(debug, "returning address {} for domain [{}]", address, rec->name_);
-
-    size_t address_size = 0;
-    DnsAnswerRecordPtr answer_rec = nullptr;
+    const size_t index = rng_.random() % configured_address_list.size();
+    const auto ipaddr = configured_address_list[index];
+    // ENVOY_LOG(debug, "returning address {} for domain [{}]", address_str, rec->name_);
 
     switch (rec->type_) {
     case DnsRecordType::AAAA:
-      address_size = 16;
+      if (ipaddr->ip()->ipv6() == nullptr) {
+        ENVOY_LOG(error, "Invalid record type requested. Unable to return IPV6 address for query");
+        return nullptr;
+      }
       break;
-    case DnsRecordType::A:
-      address_size = 4;
-      break;
-    case DnsRecordType::CNAME:
-      ENVOY_LOG(debug, "CNAME types not yet supported");
-      break;
-    }
 
-    if (!address_size) {
-      ENVOY_LOG(error, "Unable to determine the address size for record type [{}] for address [{}]",
-                rec->type_, address);
+    case DnsRecordType::A:
+      if (ipaddr->ip()->ipv4() == nullptr) {
+        ENVOY_LOG(error, "Invalid record type requested. Unable to return IPV4 address for query");
+        return nullptr;
+      }
+      break;
+
+    default:
+      ENVOY_LOG(error, "record type [{}] not yet supported", rec->type_);
       return nullptr;
     }
 
-    answer_rec = std::make_unique<DnsAnswerRecord>(rec->name_, rec->type_, rec->class_, 300 /*ttl*/,
-                                                   address_size /*Address size*/, address);
-    return answer_rec;
+    // The answer record could contain types other than IP's so we cannot limit the address
+    return std::make_unique<DnsAnswerRecord>(rec->name_, rec->type_, rec->class_, 300 /*ttl*/,
+                                             ipaddr);
   }
 
   return nullptr;
@@ -124,9 +130,15 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
 void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data) {
 
   Buffer::OwnedImpl response{};
-  (void)query_parser_->buildResponseBuffer(response, answer_rec_);
+  if (!query_parser_->buildResponseBuffer(response, answer_rec_)) {
+    // TODO:  Do we send an empty buffer back to the client or
+    //        craft a fixed response here? We will need a minimum
+    //        of the query id from the request
+    ENVOY_LOG(error, "Unable to build a response for the client");
+    response.drain(response.length());
+  }
 
-  ENVOY_LOG(debug, "Sending response from: {} to: {}",
+  ENVOY_LOG(trace, "Sending response from: {} to: {}",
             request_data.addresses_.local_->asStringView(),
             request_data.addresses_.peer_->asStringView());
 
@@ -137,9 +149,11 @@ void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data) {
   listener_.send(response_data);
 }
 
-void DnsFilter::onReceiveError(Api::IoError::IoErrorCode) {
+void DnsFilter::onReceiveError(Api::IoError::IoErrorCode error_code) {
   // config_->stats().downstream_sess_rx_errors_.inc();
+  (void)error_code;
 }
+
 } // namespace DnsFilter
 } // namespace UdpFilters
 } // namespace Extensions

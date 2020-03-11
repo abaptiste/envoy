@@ -11,8 +11,14 @@ envoy_package()
 
 envoy_cc_library(
     name = "dns_filter_lib",
-    srcs = ["dns_filter.cc", "dns_parser.cc"],
-    hdrs = ["dns_filter.h", "dns_parser.h" ],
+    srcs = [
+        "dns_filter.cc",
+        "dns_parser.cc",
+    ],
+    hdrs = [
+        "dns_filter.h",
+        "dns_parser.h",
+    ],
     deps = [
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:file_event_interface",
@@ -23,6 +29,7 @@ envoy_cc_library(
         "//source/common/common:empty_string",
         "//source/common/config:config_provider_lib",
         "//source/common/network:address_lib",
+        "//source/common/network:resolver_lib",
         "//source/common/network:utility_lib",
         "//source/common/router:rds_lib",
         "@envoy_api//envoy/config/filter/udp/dns_filter/v2alpha:pkg_cc_proto",
