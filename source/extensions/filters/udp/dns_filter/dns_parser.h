@@ -1,6 +1,7 @@
 #pragma once
 
 #include "envoy/buffer/buffer.h"
+#include "envoy/network/address.h"
 #include "envoy/network/listener.h"
 
 #include "common/buffer/buffer_impl.h"
@@ -52,7 +53,7 @@ PACKED_STRUCT(struct dns_query_s {
 using DnsMessageStruct = struct dns_query_s;
 
 enum DnsRecordClass { IN = 1 };
-enum DnsRecordType { A = 1, CNAME = 5, AAAA = 28 };
+enum DnsRecordType { A = 1, AAAA = 28 };
 enum class DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
 
 // BaseDnsRecord class containing the domain name operated on, its class, and address type
@@ -92,16 +93,14 @@ using DnsQueryList = std::list<DnsQueryRecordPtr>;
 class DnsAnswerRecord : public BaseDnsRecord {
 public:
   DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
-                  const uint32_t ttl, const uint16_t data_length, const std::string& address)
-      : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), data_length_(data_length),
-        address_(address) {}
+                  const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr)
+      : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
   virtual ~DnsAnswerRecord() {}
   virtual Buffer::OwnedImpl& serialize();
 
   const uint32_t ttl_;
-  const uint16_t data_length_;
-  const std::string address_;
+  Network::Address::InstanceConstSharedPtr ip_addr_;
 };
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;

@@ -30,17 +30,11 @@ Api::IoCallUint64Result makeNoError(uint64_t rc) {
   return no_error;
 }
 
-/*
-class TestDnsFilter : public DnsFilter {
-public:
-  using DnsFilter::DnsFilter;
-};
-*/
-
 class DnsFilterTest : public testing::Test {
 public:
   DnsFilterTest()
       : listener_address_(Network::Utility::parseInternetAddressAndPort("127.0.2.1:5353")) {
+    // TODO: Need to be consume the log setting from the command line
     // Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
     Logger::Registry::setLogLevel(spdlog::level::trace);
     EXPECT_CALL(callbacks_, udpListener()).Times(AtLeast(0));
@@ -120,6 +114,21 @@ public:
     return buffer_.toString();
   }
 
+  void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecordPtr& answer) {
+
+    ASSERT_TRUE(answer->ip_addr_ != nullptr);
+
+    const auto resolved_address = answer->ip_addr_->ip()->addressAsString();
+    if (addresses.size() == 1) {
+      const auto expected = addresses.begin();
+      ASSERT_EQ(*expected, resolved_address);
+      return;
+    }
+
+    const auto iter = std::find(addresses.begin(), addresses.end(), resolved_address);
+    ASSERT_TRUE(iter != addresses.end());
+  }
+
   const Network::Address::InstanceConstSharedPtr listener_address_;
   Server::Configuration::MockListenerFactoryContext listener_factory_;
   DnsFilterEnvoyConfigSharedPtr config_;
@@ -131,10 +140,6 @@ public:
   DnsResponseParser response_parser_;
   Runtime::RandomGeneratorImpl rng_;
 
-  // TestDnsFilter parent_filter_;
-
-  // NiceMock<MockTimeSystem> time_system_;
-
   const std::string config_yaml = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
@@ -145,24 +150,25 @@ client_config:
     - "8.8.8.8"
     - "8.8.4.4"
 server_config:
-  retry_count: 3
-  virtual_domains:
-    - name: "www.foo1.com"
-      endpoint:
-        type: STATIC
-        address:
-          - 10.0.0.1
-          - 10.0.0.2
-    - name: "www.foo2.com"
-      endpoint:
-        type: STATIC
-        address:
-          - 10.0.2.1
-    - name: "www.foo3.com"
-      endpoint:
-        type: STATIC
-        address:
-          - 10.0.3.1
+  control_plane_cfg:
+    external_retry_count: 3
+    virtual_domains:
+      - name: "www.foo1.com"
+        endpoint:
+          addresslist:
+            address:
+              - 10.0.0.1
+              - 10.0.0.2
+      - name: "www.foo2.com"
+        endpoint:
+          addresslist:
+            address:
+              - 2001:8a:c1::2800:7
+      - name: "www.foo3.com"
+        endpoint:
+          addresslist:
+            address:
+              - 10.0.3.1
   )EOF";
 };
 
@@ -171,34 +177,82 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   setup(config_yaml);
 
+  // TODO: Validate that the response is addressed to this client
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
-  bool ret = response_parser_.parseResponseData(response_ptr);
-  ASSERT_TRUE(ret);
+  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
 
   ASSERT_EQ(0, response_parser_.getQueries().size());
   ASSERT_EQ(0, response_parser_.getAnswers().size());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
 
-TEST_F(DnsFilterTest, SingleValidQuery) {
+TEST_F(DnsFilterTest, SingleTypeAQuery) {
   InSequence s;
 
   setup(config_yaml);
 
-  uint16_t rec_type = 1;
-  uint16_t rec_class = 1;
-  const std::string query = buildQueryForDomain("www.foo3.com", rec_type, rec_class);
+  const std::string query =
+      buildQueryForDomain("www.foo3.com", DnsRecordType::A, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  bool ret = response_parser_.parseResponseData(response_ptr);
-  ASSERT_TRUE(ret);
+  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
   ASSERT_EQ(1, response_parser_.getAnswers().size());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
+
+  // Verify the address returned
+  const auto answer_iter = response_parser_.getAnswers().begin();
+  const DnsAnswerRecordPtr& answer = *answer_iter;
+
+  std::list<std::string> expected{"10.0.3.1"};
+  verifyAddress(expected, answer);
+}
+
+TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
+  InSequence s;
+
+  setup(config_yaml);
+
+  const std::string query =
+      buildQueryForDomain("www.foo2.com", DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(0, response_parser_.getAnswers().size());
+  ASSERT_EQ(3, response_parser_.getQueryResponseCode());
+}
+
+TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
+  InSequence s;
+
+  setup(config_yaml);
+
+  const std::string query =
+      buildQueryForDomain("www.foo2.com", DnsRecordType::AAAA, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getQueryResponseCode());
+
+  // Verify the address returned
+  const auto answer_iter = response_parser_.getAnswers().begin();
+  const DnsAnswerRecordPtr& answer = *answer_iter;
+
+  std::list<std::string> expected{"2001:8a:c1::2800:7"};
+  verifyAddress(expected, answer);
 }
 
 } // namespace
