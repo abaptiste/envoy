@@ -11,6 +11,7 @@
 #include "common/runtime/runtime_impl.h"
 
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
+#include "extensions/filters/udp/dns_filter/dns_filter_resolver.h"
 
 #include "absl/container/flat_hash_set.h"
 
@@ -38,8 +39,8 @@ struct DnsFilterStats {
   ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT)
 };
 
-using DnsAddressList = std::vector<Network::Address::InstanceConstSharedPtr>;
-using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, DnsAddressList>;
+using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
+using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrVec>;
 
 class DnsFilterEnvoyConfig {
 public:
@@ -49,6 +50,10 @@ public:
 
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
+  absl::flat_hash_set<std::string>& known_domains() const { return known_domains_; }
+  AddressConstPtrVec& resolvers() const { return resolvers_; }
+  bool forward_queries() const { return forward_queries_; }
+
 
 private:
   static DnsFilterStats generateStats(const std::string& stat_prefix, Stats::Scope& scope) {
@@ -59,29 +64,35 @@ private:
   Stats::Scope& root_scope;
   mutable DnsFilterStats stats_;
   mutable DnsVirtualDomainConfig virtual_domains_;
+  mutable absl::flat_hash_set<std::string> known_domains_;
+  bool forward_queries_;
+  mutable AddressConstPtrVec resolvers_;
 };
 
 using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
 
 class DnsFilter : public Network::UdpListenerReadFilter, Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsFilter(Network::UdpReadFilterCallbacks& callbacks, const DnsFilterEnvoyConfigSharedPtr& config)
-      : UdpListenerReadFilter(callbacks), config_(config),
-        query_parser_(std::make_unique<DnsQueryParser>()),
-        response_parser_(std::make_unique<DnsResponseParser>()),
-        listener_(callbacks.udpListener()) {}
+  DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
+            const DnsFilterEnvoyConfigSharedPtr& config,
+            Event::Dispatcher& dispatcher);
 
   // Network::UdpListenerReadFilter callbacks
   void onData(Network::UdpRecvData& client_request) override;
   void onReceiveError(Api::IoError::IoErrorCode error_code) override;
+
+  absl::optional<std::string> isKnownDomain(const std::string& domain_name);
 
 private:
   void sendDnsResponse(const Network::UdpRecvData& request_data);
   DnsAnswerRecordPtr getResponseForQuery();
 
   const DnsFilterEnvoyConfigSharedPtr config_;
+  Event::Dispatcher& dispatcher_;
+
   DnsQueryParserPtr query_parser_;
-  DnsResponseParserPtr response_parser_;
+  DnsFilterResolverPtr resolver_;
+
   Network::UdpListener& listener_;
   Runtime::RandomGeneratorImpl rng_;
   DnsAnswerRecordPtr answer_rec_;

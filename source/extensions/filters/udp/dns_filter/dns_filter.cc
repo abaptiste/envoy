@@ -2,6 +2,7 @@
 
 #include "envoy/network/listener.h"
 
+#include "common/common/empty_string.h"
 #include "common/network/address_impl.h"
 
 namespace Envoy {
@@ -19,30 +20,92 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   // store configured data for server context
   const auto& server_config = config.server_config();
 
-  if (server_config.has_control_plane_cfg()) {
+  if (server_config.has_control_plane_config()) {
 
-    const auto& cfg = server_config.control_plane_cfg();
+    const auto& cfg = server_config.control_plane_config();
     const size_t entries = cfg.virtual_domains().size();
 
     virtual_domains_.reserve(entries);
     for (const auto& virtual_domain : cfg.virtual_domains()) {
-      DnsAddressList addresses{};
+      AddressConstPtrVec addrs{};
 
-      if (virtual_domain.endpoint().has_addresslist()) {
-        const auto& address_list = virtual_domain.endpoint().addresslist().address();
-        addresses.reserve(address_list.size());
+      if (virtual_domain.endpoint().has_address_list()) {
+        const auto& address_list = virtual_domain.endpoint().address_list().address();
+        addrs.reserve(address_list.size());
+        // This will throw an exception if the configured_address string is malformed
         for (const auto& configured_address : address_list) {
-          // This will throw an exception if the configured_address string is malformed
           const auto ipaddr = Network::Utility::parseInternetAddress(configured_address, 0, true);
-          addresses.push_back(ipaddr);
+          addrs.push_back(ipaddr);
         }
       }
 
-      virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addresses));
+      // TODO: Should we check whether the virtual domain exists in the known domains
+      // and add it to the known domain list if missing?
+      virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addrs));
+    }
+
+    // Add known domains
+    for (const auto& domain : cfg.known_domains()) {
+      // TODO: Ensure that the known domains don't start with a period
+      if (known_domains_.find(domain) != known_domains_.end()) {
+        known_domains_.emplace(domain);
+      }
     }
   }
 
   // TODO: store configured data for client context
+  const auto& client_config = config.client_config();
+  forward_queries_ = client_config.forward_query();
+  if (forward_queries_) {
+    // Instantiate resolver with external servers
+    const auto& upstream_resolvers = client_config.upstream_resolvers();
+    resolvers_.reserve(upstream_resolvers.size());
+    for (const auto& resolver : upstream_resolvers) {
+      const auto ipaddr = Network::Utility::parseInternetAddress(resolver, 0, true);
+      resolvers_.push_back(ipaddr);
+    }
+  }
+}
+
+DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
+                     const DnsFilterEnvoyConfigSharedPtr& config, Event::Dispatcher& dispatcher)
+    : UdpListenerReadFilter(callbacks), config_(config), dispatcher_(dispatcher),
+      query_parser_(std::make_unique<DnsQueryParser>()), listener_(callbacks.udpListener())
+
+{
+  auto dns_resolver =
+      dispatcher_.createDnsResolver(config->resolvers(), false /* use tcp for dns lookups */);
+  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver);
+}
+
+absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
+
+  const auto known_domains = config_->known_domains();
+
+  // If we don't have a list of whitelisted domains, we will try to
+  // resolve the name with an upstream nameserver
+  if (known_domains.empty()) {
+    return absl::nullopt;
+  }
+
+  // Search for the last dot in the name.  If std::string:npos is
+  // returned, we don't need any additional logic for that case
+  const auto end = domain_name.find_last_of('.');
+
+  // We need to continally strip subdomains off of the domain_name
+  // until we find a match or reach the last period in the input name
+
+  auto iter = domain_name.find_first_of('.');
+  while (iter != end) {
+    std::string substr = domain_name.substr(++iter);
+    auto found = std::find(known_domains.begin(), known_domains.end(), substr);
+    if (found != known_domains.end()) {
+      return absl::make_optional<std::string>(*found);
+    }
+
+    iter = domain_name.find_first_of('.', iter);
+  }
+  return absl::nullopt;
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
@@ -61,14 +124,13 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   ENVOY_LOG(trace, "Parsed address for query: {}",
             answer_rec_ != nullptr ? answer_rec_->ip_addr_->ip()->addressAsString() : "None");
 
-  // TODO: Determine whether we should send the query to a different server
-
   // respond to client
   sendDnsResponse(client_request);
 }
 
 DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
 
+  Network::Address::InstanceConstSharedPtr ipaddr = nullptr;
   const auto& queries = query_parser_->getQueries();
 
   // It appears to be a rare case where we would have more than
@@ -79,48 +141,74 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
 
   const auto& domains = config_->domains();
 
-  for (const auto& rec : queries) {
+  // Determine whether we can answer the query
+  for (const auto& query : queries) {
 
-    // TODO: If we have a sufficiently large ( > 100) list of domains, we should use a binary
-    // search.
-    const auto iter = domains.find(rec->name_);
-    if (iter == domains.end()) {
-      ENVOY_LOG(debug, "Domain [{}] is not a configured entry", rec->name_);
-      return nullptr;
+    // Try to resolve the query locally.  If forwarding the query externally is
+    // disabled we will always attempt to resolve with the configured domains
+    auto known_domain = isKnownDomain(query->name_);
+    if (known_domain.has_value() || !config_->forward_queries()) {
+
+      // TODO: Determine whether the name is a cluster
+      // TODO: If we have a large ( > 100) domain list, use a binary search.
+      const auto iter = domains.find(query->name_);
+      if (iter == domains.end()) {
+        ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query->name_);
+        break;
+      }
+
+      const auto& configured_address_list = iter->second;
+      if (configured_address_list.empty()) {
+        ENVOY_LOG(debug, "Domain [{}] list is empty", query->name_);
+        break;
+      }
+
+      const size_t index = rng_.random() % configured_address_list.size();
+      ipaddr = configured_address_list[index];
+      ENVOY_LOG(debug, "returning address {} for domain [{}]", ipaddr->ip()->addressAsString(),
+                query->name_);
     }
 
-    const auto& configured_address_list = iter->second;
-    if (configured_address_list.empty()) {
-      ENVOY_LOG(debug, "Domain [{}] list is empty", rec->name_);
-      return nullptr;
+    // We don't have a statically configured record for the domain
+    // or it's unknown.  Try resolving it externally
+    if (ipaddr == nullptr) {
+      ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
+      resolver_->resolve_query(query);
+      auto resolved_addresses = resolver_->get_resolved_hosts();
+
+      ENVOY_LOG(debug, "Resolved [{}] addresses for [{}]", resolved_addresses.size(), query->name_);
+
+      if (resolved_addresses.empty()) {
+        break;
+      }
+
+      const size_t index = rng_.random() % resolved_addresses.size();
+      ipaddr = resolved_addresses[index];
     }
 
-    const size_t index = rng_.random() % configured_address_list.size();
-    const auto ipaddr = configured_address_list[index];
-    // ENVOY_LOG(debug, "returning address {} for domain [{}]", address_str, rec->name_);
-
-    switch (rec->type_) {
+    // Build an answer record with the discovered address
+    switch (query->type_) {
     case DnsRecordType::AAAA:
       if (ipaddr->ip()->ipv6() == nullptr) {
-        ENVOY_LOG(error, "Invalid record type requested. Unable to return IPV6 address for query");
+        ENVOY_LOG(error, "Unable to return IPV6 address for query");
         return nullptr;
       }
       break;
 
     case DnsRecordType::A:
       if (ipaddr->ip()->ipv4() == nullptr) {
-        ENVOY_LOG(error, "Invalid record type requested. Unable to return IPV4 address for query");
+        ENVOY_LOG(error, "Unable to return IPV4 address for query");
         return nullptr;
       }
       break;
 
     default:
-      ENVOY_LOG(error, "record type [{}] not yet supported", rec->type_);
+      ENVOY_LOG(error, "record type [{}] not supported", query->type_);
       return nullptr;
     }
 
     // The answer record could contain types other than IP's so we cannot limit the address
-    return std::make_unique<DnsAnswerRecord>(rec->name_, rec->type_, rec->class_, 300 /*ttl*/,
+    return std::make_unique<DnsAnswerRecord>(query->name_, query->type_, query->class_, 300 /*ttl*/,
                                              ipaddr);
   }
 

@@ -34,9 +34,10 @@ class DnsFilterTest : public testing::Test {
 public:
   DnsFilterTest()
       : listener_address_(Network::Utility::parseInternetAddressAndPort("127.0.2.1:5353")) {
-    // TODO: Need to be consume the log setting from the command line
+    // TODO: Consume the log setting from the command line
     // Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
     Logger::Registry::setLogLevel(spdlog::level::trace);
+
     EXPECT_CALL(callbacks_, udpListener()).Times(AtLeast(0));
     EXPECT_CALL(callbacks_.udp_listener_, send(_))
         .WillRepeatedly(
@@ -54,8 +55,13 @@ public:
     TestUtility::loadFromYamlAndValidate(yaml, config);
     auto store = stats_store_.createScope("dns_scope");
     EXPECT_CALL(listener_factory_, scope()).WillOnce(ReturnRef(*store));
+
+    resolver_ = std::make_shared<Network::MockDnsResolver>();
+    EXPECT_CALL(dispatcher_, createDnsResolver(_, _)).WillOnce(Return(resolver_));
+    ON_CALL(listener_factory_, dispatcher()).WillByDefault(ReturnRef(dispatcher_));
+
     config_ = std::make_shared<DnsFilterEnvoyConfig>(listener_factory_, config);
-    filter_ = std::make_unique<DnsFilter>(callbacks_, config_);
+    filter_ = std::make_unique<DnsFilter>(callbacks_, config_, dispatcher_);
   }
 
   void sendQueryFromClient(const std::string& peer_address, const std::string& buffer) {
@@ -116,6 +122,7 @@ public:
 
   void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecordPtr& answer) {
 
+    ASSERT_TRUE(answer != nullptr);
     ASSERT_TRUE(answer->ip_addr_ != nullptr);
 
     const auto resolved_address = answer->ip_addr_->ip()->addressAsString();
@@ -140,33 +147,35 @@ public:
   DnsResponseParser response_parser_;
   Runtime::RandomGeneratorImpl rng_;
 
+  Event::MockDispatcher dispatcher_;
+  std::shared_ptr<Network::MockDnsResolver> resolver_;
+
   const std::string config_yaml = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
-  forward_query: true
-  dns_query_timeout: 3s
+  forward_query: false
   upstream_resolvers:
     - "1.1.1.1"
     - "8.8.8.8"
     - "8.8.4.4"
 server_config:
-  control_plane_cfg:
+  control_plane_config:
     external_retry_count: 3
     virtual_domains:
       - name: "www.foo1.com"
         endpoint:
-          addresslist:
+          address_list:
             address:
               - 10.0.0.1
               - 10.0.0.2
       - name: "www.foo2.com"
         endpoint:
-          addresslist:
+          address_list:
             address:
               - 2001:8a:c1::2800:7
       - name: "www.foo3.com"
         endpoint:
-          addresslist:
+          address_list:
             address:
               - 10.0.3.1
   )EOF";
@@ -252,6 +261,59 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
   const DnsAnswerRecordPtr& answer = *answer_iter;
 
   std::list<std::string> expected{"2001:8a:c1::2800:7"};
+  verifyAddress(expected, answer);
+}
+
+TEST_F(DnsFilterTest, ForwardQueryTest) {
+
+  InSequence s;
+
+
+  const std::string query_host("www.foobaz.com");
+  const std::string expected_address("130.207.244.251");
+  const std::string config = R"EOF(
+stat_prefix: "my_prefix"
+client_config:
+  forward_query: true
+  upstream_resolvers:
+    - "1.1.1.1"
+    - "8.8.8.8"
+    - "8.8.4.4"
+server_config:
+  control_plane_config:
+    external_retry_count: 3
+    virtual_domains:
+      - name: "www.foo1.com"
+        endpoint:
+          address_list:
+            address:
+              - 10.0.0.1
+  )EOF";
+
+  setup(config);
+
+  const std::string query =
+      buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+
+  // Save the callback so that we can control the returned addresses
+  Network::DnsResolver::ResolveCb resolve_cb;
+  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+      .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
+
+  // Send a query to a name not in our configuration
+  sendQueryFromClient("10.0.0.1:1000", query);
+  
+  // Callbacks?
+  resolve_cb(Network::DnsResolver::ResolutionStatus::Success,
+             TestUtility::makeDnsResponse({expected_address}));
+
+  // Verify the address returned
+  const auto answer_iter = response_parser_.getAnswers().begin();
+  const DnsAnswerRecordPtr& answer = *answer_iter;
+
+  std::list<std::string> expected{expected_address};
   verifyAddress(expected, answer);
 }
 

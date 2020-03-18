@@ -14,17 +14,21 @@ envoy_cc_library(
     srcs = [
         "dns_filter.cc",
         "dns_parser.cc",
+        "dns_filter_resolver.cc"
     ],
     hdrs = [
         "dns_filter.h",
         "dns_parser.h",
+        "dns_filter_resolver.h"
     ],
     deps = [
+        "//include/envoy/event:dispatcher_interface",
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:file_event_interface",
         "//include/envoy/network:address_interface",
         "//include/envoy/network:filter_interface",
         "//include/envoy/network:listener_interface",
+        "//include/envoy/network:dns_interface",
         "//source/common/buffer:buffer_lib",
         "//source/common/common:empty_string",
         "//source/common/config:config_provider_lib",
