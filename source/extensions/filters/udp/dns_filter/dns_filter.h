@@ -50,13 +50,12 @@ public:
       Server::Configuration::ListenerFactoryContext& context,
       const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config);
 
-  Event::Dispatcher& dispatcher() const { return dispatcher_; }
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
   absl::flat_hash_set<std::string>& known_domains() const { return known_domains_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forward_queries() const { return forward_queries_; }
-  Network::DnsResolverSharedPtr resolver() const { return resolver_; }
+  //Network::DnsResolverSharedPtr resolver() const { return resolver_; }
   std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
 
 private:
@@ -66,7 +65,6 @@ private:
   }
 
   Stats::Scope& root_scope;
-  Event::Dispatcher& dispatcher_;
   Upstream::ClusterManager& cluster_manager_;
 
   mutable DnsFilterStats stats_;
@@ -74,7 +72,7 @@ private:
   mutable absl::flat_hash_set<std::string> known_domains_;
   bool forward_queries_;
   mutable AddressConstPtrVec resolvers_;
-  Network::DnsResolverSharedPtr resolver_;
+  //Network::DnsResolverSharedPtr resolver_;
   mutable std::chrono::milliseconds resolver_timeout_ms_;
 };
 
@@ -103,6 +101,7 @@ private:
   Runtime::RandomGeneratorImpl rng_;
   DnsAnswerRecordPtr answer_rec_;
   DnsFilterResolverPtr resolver_;
+  //Network::DnsResolverSharedPtr resolver_;
 };
 
 } // namespace DnsFilter

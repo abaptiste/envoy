@@ -13,11 +13,10 @@ namespace DnsFilter {
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config)
-    : root_scope(context.scope()), dispatcher_(context.dispatcher()),
-      cluster_manager_(context.clusterManager()),
+    : root_scope(context.scope()), cluster_manager_(context.clusterManager()),
       stats_(generateStats(config.stat_prefix(), root_scope)) {
 
-  static constexpr uint64_t ResolverTimeoutMs = 100;
+  static constexpr uint64_t ResolverTimeoutMs = 500;
 
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
@@ -71,7 +70,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       resolvers_.push_back(ipaddr);
     }
   }
-  resolver_ = dispatcher_.createDnsResolver(resolvers_, false /* use tcp */);
 
   resolver_timeout_ms_ = std::chrono::milliseconds(
       PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, ResolverTimeoutMs));
@@ -83,8 +81,9 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
       message_parser_(std::make_unique<DnsMessageParser>()), listener_(callbacks.udpListener())
 
 {
-  resolver_ = std::make_unique<DnsFilterResolver>(config->resolver(), config->resolver_timeout(),
-                                                  config->dispatcher());
+
+  resolver_ = std::make_unique<DnsFilterResolver>(/*dns_resolver_, */ config->resolver_timeout(),
+                                                  listener_.dispatcher());
 }
 
 absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
@@ -162,6 +161,7 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
     if (known_domain.has_value() || !config_->forward_queries()) {
 
       // TODO: Determine whether the name is a cluster
+
       // TODO: If we have a large ( > 100) domain list, use a binary search.
       const auto iter = domains.find(query->name_);
       if (iter == domains.end()) {
@@ -181,17 +181,13 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
                 query->name_);
     }
 
-    // We don't have a statically configured record for the domain
-    // or it's unknown.  Try resolving it externally
+    // We don't have a statically configured record for the domain or it's unknown
+    // resolve it externally
     if (ipaddr == nullptr) {
       ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
 
       // TODO retries
-      absl::Notification notifier{};
-      resolver_->resolve_query(query, &notifier);
-
-      // use WaitForNotificationWithTimeout() which takes an absl::Duration
-      notifier.WaitForNotification();
+      resolver_->resolve_query(query);
 
       auto resolved_addresses = resolver_->get_resolved_hosts();
 
@@ -206,6 +202,7 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
     }
 
     // Build an answer record with the discovered address
+    ASSERT(ipaddr != nullptr);
     switch (query->type_) {
     case DnsRecordType::AAAA:
       if (ipaddr->ip()->ipv6() == nullptr) {

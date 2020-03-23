@@ -7,11 +7,9 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain,
-                                      absl::Notification* notifier) {
+void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain){
 
   resolved_hosts_.clear();
-  notifier_ = notifier;
 
   Network::DnsLookupFamily lookup_family;
   switch (domain->type_) {
@@ -53,7 +51,6 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain,
             resolved_hosts_.push_back(Network::Utility::getAddressWithPort(*(resp.address_), 0));
 
             resolution_status_ = DnsFilterResolverStatus::Complete;
-            notify();
           }
         }
       });
