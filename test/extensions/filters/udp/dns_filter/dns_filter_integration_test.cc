@@ -1,5 +1,7 @@
 #include "envoy/config/bootstrap/v3/bootstrap.pb.h"
 
+#include "extensions/filters/udp/dns_filter/dns_filter.h"
+
 #include "test/integration/integration.h"
 #include "test/test_common/network_utility.h"
 
@@ -14,11 +16,36 @@ public:
   static std::string configToUse() {
     return ConfigHelper::BASE_UDP_LISTENER_CONFIG + R"EOF(
     listener_filters:
-      name: envoy.filters.udp_listener.dns_filter
+      name: "envoy.filters.udp.dns_filter"
       typed_config:
-        '@type': type.googleapis.com/envoy.config.filter.udp.dns_filter.v2alpha.UdpProxyConfig
-        stat_prefix: foo
-        cluster: cluster_0
+        '@type': 'type.googleapis.com/envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig'
+        stat_prefix: "my_prefix"
+        client_config:
+          forward_query: true
+          upstream_resolvers:
+            - "1.1.1.1"
+            - "8.8.8.8"
+            - "8.8.4.4"
+        server_config:
+          control_plane_config:
+            external_retry_count: 3
+            virtual_domains:
+              - name: "www.foo1.com"
+                endpoint:
+                  address_list:
+                    address:
+                      - 10.0.0.1
+                      - 10.0.0.2
+              - name: "www.foo2.com"
+                endpoint:
+                  address_list:
+                    address:
+                      - 2001:8a:c1::2800:7
+              - name: "www.foo3.com"
+                endpoint:
+                  address_list:
+                    address:
+                      - 10.0.3.1
       )EOF";
   }
 
@@ -52,59 +79,92 @@ public:
     fake_upstreams_.clear();
   }
 
-#if 0
-  void requestResponseWithListenerAddress(const Network::Address::Instance& listener_address) {
+  void requestResponseWithListenerAddress(const Network::Address::Instance& listener_address,
+                                          const std::string& data_to_send,
+                                          Network::UdpRecvData& response_datagram) {
     // Send datagram to be proxied.
     Network::Test::UdpSyncPeer client(version_);
-    client.write("hello", listener_address);
+    client.write(data_to_send, listener_address);
 
-    // Wait for the upstream datagram.
-    Network::UdpRecvData request_datagram;
-    ASSERT_TRUE(fake_upstreams_[0]->waitForUdpDatagram(request_datagram));
-    EXPECT_EQ("hello", request_datagram.buffer_->toString());
-
-    // Respond from the upstream.
-    fake_upstreams_[0]->sendUdpDatagram("world1", request_datagram.addresses_.peer_);
-    Network::UdpRecvData response_datagram;
+    // Read the response
     client.recv(response_datagram);
-    EXPECT_EQ("world1", response_datagram.buffer_->toString());
-    EXPECT_EQ(listener_address.asString(), response_datagram.addresses_.peer_->asString());
-
-    EXPECT_EQ(5, test_server_->counter("udp.foo.downstream_sess_rx_bytes")->value());
-    EXPECT_EQ(1, test_server_->counter("udp.foo.downstream_sess_rx_datagrams")->value());
-    EXPECT_EQ(5, test_server_->counter("cluster.cluster_0.upstream_cx_tx_bytes_total")->value());
-    EXPECT_EQ(1, test_server_->counter("cluster.cluster_0.udp.sess_tx_datagrams")->value());
-
-    EXPECT_EQ(6, test_server_->counter("cluster.cluster_0.upstream_cx_rx_bytes_total")->value());
-    EXPECT_EQ(1, test_server_->counter("cluster.cluster_0.udp.sess_rx_datagrams")->value());
-    // The stat is incremented after the send so there is a race condition and we must wait for
-    // the counter to be incremented.
-    test_server_->waitForCounterEq("udp.foo.downstream_sess_tx_bytes", 6);
-    test_server_->waitForCounterEq("udp.foo.downstream_sess_tx_datagrams", 1);
-
-    EXPECT_EQ(1, test_server_->counter("udp.foo.downstream_sess_total")->value());
-    EXPECT_EQ(1, test_server_->gauge("udp.foo.downstream_sess_active")->value());
   }
-#endif
+
+  // TODO: put this into a shared file
+  std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
+
+    Extensions::UdpFilters::DnsFilter::DnsMessageStruct query{};
+
+    // Generate a random query ID
+    query.id = rng_.random() & 0xFFFF;
+
+    // Signify that this is a query
+    query.f.flags.qr = 0;
+
+    // This should usually be zero
+    query.f.flags.opcode = 0;
+
+    query.f.flags.aa = 0;
+    query.f.flags.tc = 0;
+
+    // Set Recursion flags (at least one bit set so that the flags are not all zero)
+    query.f.flags.rd = 1;
+    query.f.flags.ra = 0;
+
+    // reserved flag is not set
+    query.f.flags.z = 0;
+
+    // Set the authenticated flags to zero
+    query.f.flags.ad = 0;
+    query.f.flags.cd = 0;
+
+    query.questions = 1;
+    query.answers = 0;
+    query.authority_rrs = 0;
+    query.additional_rrs = 0;
+
+    Buffer::OwnedImpl buffer_;
+    buffer_.writeBEInt<uint16_t>(query.id);
+    buffer_.writeBEInt<uint16_t>(query.f.val);
+    buffer_.writeBEInt<uint16_t>(query.questions);
+    buffer_.writeBEInt<uint16_t>(query.answers);
+    buffer_.writeBEInt<uint16_t>(query.authority_rrs);
+    buffer_.writeBEInt<uint16_t>(query.additional_rrs);
+
+    Extensions::UdpFilters::DnsFilter::DnsQueryRecordPtr query_ptr =
+        std::make_unique<Extensions::UdpFilters::DnsFilter::DnsQueryRecord>(name, rec_type,
+                                                                            rec_class);
+
+    buffer_.add(query_ptr->serialize());
+
+    return buffer_.toString();
+  }
+
+  Runtime::RandomGeneratorImpl rng_;
 };
 
-#if 0
-INSTANTIATE_TEST_SUITE_P(IpVersions, UdpProxyIntegrationTest,
+INSTANTIATE_TEST_SUITE_P(IpVersions, DnsFilterIntegrationTest,
                          testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
                          TestUtility::ipTestParamsToString);
 
 // Basic loopback test.
-TEST_P(UdpProxyIntegrationTest, HelloWorldOnLoopback) {
-  setup(1);
+TEST_P(DnsFilterIntegrationTest, HelloWorldOnLoopback) {
+  setup(0);
   const uint32_t port = lookupPort("listener_0");
   const auto listener_address = Network::Utility::resolveUrl(
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
-  requestResponseWithListenerAddress(*listener_address);
+
+  Network::UdpRecvData response;
+  std::string query =
+      buildQueryForDomain("www.google.com", Extensions::UdpFilters::DnsFilter::DnsRecordType::A,
+                          Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  requestResponseWithListenerAddress(*listener_address, query, response);
 }
 
+#if 0
 // Verifies calling sendmsg with a non-local address. Note that this test is only fully complete for
 // IPv4. See the comment below for more details.
-TEST_P(UdpProxyIntegrationTest, HelloWorldOnNonLocalAddress) {
+TEST_P(DnsFilterIntegrationTest, HelloWorldOnNonLocalAddress) {
   setup(1);
   const uint32_t port = lookupPort("listener_0");
   Network::Address::InstanceConstSharedPtr listener_address;
@@ -130,7 +190,7 @@ TEST_P(UdpProxyIntegrationTest, HelloWorldOnNonLocalAddress) {
 }
 
 // Make sure multiple clients are routed correctly to a single upstream host.
-TEST_P(UdpProxyIntegrationTest, MultipleClients) {
+TEST_P(DnsFilterIntegrationTest, MultipleClients) {
   setup(1);
   const uint32_t port = lookupPort("listener_0");
   const auto listener_address = Network::Utility::resolveUrl(
@@ -173,7 +233,7 @@ TEST_P(UdpProxyIntegrationTest, MultipleClients) {
 
 // Make sure sessions correctly forward to the same upstream host when there are multiple upstream
 // hosts.
-TEST_P(UdpProxyIntegrationTest, MultipleUpstreams) {
+TEST_P(DnsFilterIntegrationTest, MultipleUpstreams) {
   setup(2);
   const uint32_t port = lookupPort("listener_0");
   const auto listener_address = Network::Utility::resolveUrl(

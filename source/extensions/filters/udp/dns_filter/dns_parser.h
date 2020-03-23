@@ -147,23 +147,16 @@ private:
                                        uint64_t* name_offset);
 };
 
-class DnsQueryParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
+class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
 public:
   virtual bool buildResponseBuffer(Buffer::OwnedImpl& buffer, DnsAnswerRecordPtr& answer_rec);
+  virtual bool parseResponseData(const Buffer::InstancePtr& buffer);
 
 private:
   void setDnsResponseFlags();
 };
 
-using DnsQueryParserPtr = std::unique_ptr<DnsQueryParser>;
-
-class DnsResponseParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
-
-public:
-  virtual bool parseResponseData(const Buffer::InstancePtr& buffer);
-};
-
-using DnsResponseParserPtr = std::unique_ptr<DnsResponseParser>;
+using DnsMessageParserPtr = std::unique_ptr<DnsMessageParser>;
 
 } // namespace DnsFilter
 } // namespace UdpFilters

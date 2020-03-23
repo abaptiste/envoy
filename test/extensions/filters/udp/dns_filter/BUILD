@@ -30,6 +30,7 @@ envoy_extension_cc_test(
     extension_name = "envoy.filters.udp_listener.dns_filter",
     deps = [
         "//source/extensions/filters/udp/dns_filter:config",
+        "//source/extensions/filters/udp/dns_filter:dns_filter_lib",
         "//test/integration:integration_lib",
         "@envoy_api//envoy/config/bootstrap/v3:pkg_cc_proto",
     ],

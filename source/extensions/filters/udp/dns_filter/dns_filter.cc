@@ -13,7 +13,11 @@ namespace DnsFilter {
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config)
-    : root_scope(context.scope()), stats_(generateStats(config.stat_prefix(), root_scope)) {
+    : root_scope(context.scope()), dispatcher_(context.dispatcher()),
+      cluster_manager_(context.clusterManager()),
+      stats_(generateStats(config.stat_prefix(), root_scope)) {
+
+  static constexpr uint64_t ResolverTimeoutMs = 100;
 
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
@@ -22,11 +26,13 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
   if (server_config.has_control_plane_config()) {
 
-    const auto& cfg = server_config.control_plane_config();
-    const size_t entries = cfg.virtual_domains().size();
+    const auto& cp_config = server_config.control_plane_config();
+    const size_t entries = cp_config.virtual_domains().size();
 
+    // TODO: Investigate how easy it would be to support wildcard
+    // matching so that we can eliminate having two sets of domains
     virtual_domains_.reserve(entries);
-    for (const auto& virtual_domain : cfg.virtual_domains()) {
+    for (const auto& virtual_domain : cp_config.virtual_domains()) {
       AddressConstPtrVec addrs{};
 
       if (virtual_domain.endpoint().has_address_list()) {
@@ -45,9 +51,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
 
     // Add known domains
-    for (const auto& domain : cfg.known_domains()) {
+    for (const auto& domain : cp_config.known_domains()) {
       // TODO: Ensure that the known domains don't start with a period
-      if (known_domains_.find(domain) != known_domains_.end()) {
+      if (known_domains_.find(domain) == known_domains_.end()) {
         known_domains_.emplace(domain);
       }
     }
@@ -65,40 +71,46 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       resolvers_.push_back(ipaddr);
     }
   }
+  resolver_ = dispatcher_.createDnsResolver(resolvers_, false /* use tcp */);
+
+  resolver_timeout_ms_ = std::chrono::milliseconds(
+      PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, ResolverTimeoutMs));
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
-                     const DnsFilterEnvoyConfigSharedPtr& config, Event::Dispatcher& dispatcher)
-    : UdpListenerReadFilter(callbacks), config_(config), dispatcher_(dispatcher),
-      query_parser_(std::make_unique<DnsQueryParser>()), listener_(callbacks.udpListener())
+                     const DnsFilterEnvoyConfigSharedPtr& config)
+    : UdpListenerReadFilter(callbacks), config_(config),
+      message_parser_(std::make_unique<DnsMessageParser>()), listener_(callbacks.udpListener())
 
 {
-  auto dns_resolver =
-      dispatcher_.createDnsResolver(config->resolvers(), false /* use tcp for dns lookups */);
-  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver);
+  resolver_ = std::make_unique<DnsFilterResolver>(config->resolver(), config->resolver_timeout(),
+                                                  config->dispatcher());
 }
 
 absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
 
   const auto known_domains = config_->known_domains();
 
-  // If we don't have a list of whitelisted domains, we will try to
-  // resolve the name with an upstream nameserver
+  // If we don't have a list of whitelisted domains, we will immediately
+  // resolve the name with an upstream DNS server
   if (known_domains.empty()) {
+    ENVOY_LOG(trace, "Known domains list is empty");
     return absl::nullopt;
   }
 
-  // Search for the last dot in the name.  If std::string:npos is
-  // returned, we don't need any additional logic for that case
+  // Search for the last dot in the name.  If there is no name separator
+  // we don't need any additional logic to handle this case
   const auto end = domain_name.find_last_of('.');
 
-  // We need to continally strip subdomains off of the domain_name
+  // We need to continually strip sub-domains off of the domain_name
   // until we find a match or reach the last period in the input name
-
   auto iter = domain_name.find_first_of('.');
   while (iter != end) {
-    std::string substr = domain_name.substr(++iter);
-    auto found = std::find(known_domains.begin(), known_domains.end(), substr);
+    const std::string subdomain = domain_name.substr(++iter);
+
+    ENVOY_LOG(trace, "Searching for [{}] pos[{}:{}]", subdomain, iter, end);
+
+    auto found = known_domains.find(subdomain);
     if (found != known_domains.end()) {
       return absl::make_optional<std::string>(*found);
     }
@@ -114,7 +126,7 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   answer_rec_.release();
 
   // Parse the query
-  if (!query_parser_->parseDnsObject(client_request.buffer_)) {
+  if (!message_parser_->parseDnsObject(client_request.buffer_)) {
     sendDnsResponse(client_request);
     return;
   }
@@ -131,7 +143,7 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
 
   Network::Address::InstanceConstSharedPtr ipaddr = nullptr;
-  const auto& queries = query_parser_->getQueries();
+  const auto& queries = message_parser_->getQueries();
 
   // It appears to be a rare case where we would have more than
   // one query in a single request. It is allowed by the protocol
@@ -173,7 +185,14 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
     // or it's unknown.  Try resolving it externally
     if (ipaddr == nullptr) {
       ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
-      resolver_->resolve_query(query);
+
+      // TODO retries
+      absl::Notification notifier{};
+      resolver_->resolve_query(query, &notifier);
+
+      // use WaitForNotificationWithTimeout() which takes an absl::Duration
+      notifier.WaitForNotification();
+
       auto resolved_addresses = resolver_->get_resolved_hosts();
 
       ENVOY_LOG(debug, "Resolved [{}] addresses for [{}]", resolved_addresses.size(), query->name_);
@@ -207,7 +226,8 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
       return nullptr;
     }
 
-    // The answer record could contain types other than IP's so we cannot limit the address
+    // The answer record could contain types other than IP's. We will support only IP
+    // addresses for the moment
     return std::make_unique<DnsAnswerRecord>(query->name_, query->type_, query->class_, 300 /*ttl*/,
                                              ipaddr);
   }
@@ -218,7 +238,7 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
 void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data) {
 
   Buffer::OwnedImpl response{};
-  if (!query_parser_->buildResponseBuffer(response, answer_rec_)) {
+  if (!message_parser_->buildResponseBuffer(response, answer_rec_)) {
     // TODO:  Do we send an empty buffer back to the client or
     //        craft a fixed response here? We will need a minimum
     //        of the query id from the request

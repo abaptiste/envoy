@@ -14,8 +14,7 @@ Network::UdpListenerFilterFactoryCb DnsFilterConfigFactory::createFilterFactoryF
 
   return [shared_config](Network::UdpListenerFilterManager& filter_manager,
                          Network::UdpReadFilterCallbacks& callbacks) -> void {
-    filter_manager.addReadFilter(
-        std::make_unique<DnsFilter>(callbacks, shared_config, context.dispatcher()));
+    filter_manager.addReadFilter(std::make_unique<DnsFilter>(callbacks, shared_config));
   };
 }
 

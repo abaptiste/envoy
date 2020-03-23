@@ -7,11 +7,11 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
-
-  // TODO: How do we handle timeouts
+void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain,
+                                      absl::Notification* notifier) {
 
   resolved_hosts_.clear();
+  notifier_ = notifier;
 
   Network::DnsLookupFamily lookup_family;
   switch (domain->type_) {
@@ -26,24 +26,37 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
     return;
   }
 
-  // Resolve the address in the query and addd to the resolved_hosts vector
-  resolver_->resolve(domain->name_, lookup_family,
-                     [this](Network::DnsResolver::ResolutionStatus status,
-                            std::list<Network::DnsResponse>&& response) -> void {
-                       // ENVOY_LOG(trace, "async query for name {}", domain->name_);
+  ENVOY_LOG(trace, "Resolving name [{}]", domain->name_);
 
-                       // TODO: Cache returned addresses until TTL expires
-                       if (status == Network::DnsResolver::ResolutionStatus::Success) {
-                         resolved_hosts_.reserve(response.size());
-                         for (const auto& resp : response) {
-                           ASSERT(resp.address_ != nullptr);
-                           // ENVOY_LOG(trace, "address {} returned for name {}", resp.address_,
-                           //          domain->name_);
-                           resolved_hosts_.push_back(
-                               Network::Utility::getAddressWithPort(*(resp.address_), 0));
-                         }
-                       }
-                     });
+  resolution_status_ = DnsFilterResolverStatus::Pending;
+  resolver_timer_->disableTimer();
+  resolver_timer_->enableTimer(resolve_timeout_ms_);
+
+  // Resolve the address in the query and add to the resolved_hosts vector
+  resolver_->resolve(
+      domain->name_, lookup_family,
+      [this](Network::DnsResolver::ResolutionStatus status,
+             std::list<Network::DnsResponse>&& response) -> void {
+        if (resolution_status_ != DnsFilterResolverStatus::Pending) {
+          ENVOY_LOG(debug, "Resolution timed out before callback was executed");
+          return;
+        }
+
+        ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
+
+        // TODO: Cache returned addresses until TTL expires
+        if (status == Network::DnsResolver::ResolutionStatus::Success) {
+          resolved_hosts_.reserve(response.size());
+          for (const auto& resp : response) {
+            ASSERT(resp.address_ != nullptr);
+            ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
+            resolved_hosts_.push_back(Network::Utility::getAddressWithPort(*(resp.address_), 0));
+
+            resolution_status_ = DnsFilterResolverStatus::Complete;
+            notify();
+          }
+        }
+      });
 }
 
 } // namespace DnsFilter

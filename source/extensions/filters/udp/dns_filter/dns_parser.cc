@@ -446,7 +446,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
   return rec;
 }
 
-void DnsQueryParser::setDnsResponseFlags() {
+void DnsMessageParser::setDnsResponseFlags() {
 
   // Copy the transaction ID
   generated_.id = incoming_.id;
@@ -497,8 +497,13 @@ void DnsQueryParser::setDnsResponseFlags() {
 
 // This is the sole function that aggregates all the data and builds
 // the buffer sent back to the client
-bool DnsQueryParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
-                                         DnsAnswerRecordPtr& answer_record) {
+bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
+                                           DnsAnswerRecordPtr& answer_record) {
+
+  // TODO: We need to track the size of the response so that we can:
+  // a) Return more than one address
+  // b) Be absolutely certain we remain under the 512 byte response limit
+  // static constexpr auto buffer_size_limit = 512;
 
   // Build the response and send it on the connection
   ENVOY_LOG(debug, "In {} with address [{}]", __func__,
@@ -541,7 +546,7 @@ bool DnsQueryParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
   return true;
 }
 
-bool DnsResponseParser::parseResponseData(const Buffer::InstancePtr& buffer) {
+bool DnsMessageParser::parseResponseData(const Buffer::InstancePtr& buffer) {
   const uint64_t data_length = buffer->length();
   ENVOY_LOG(debug, "In {} with {} bytes", __func__, data_length);
 
