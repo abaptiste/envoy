@@ -7,7 +7,7 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain){
+void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
 
   resolved_hosts_.clear();
 
@@ -27,14 +27,19 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain){
   ENVOY_LOG(trace, "Resolving name [{}]", domain->name_);
 
   resolution_status_ = DnsFilterResolverStatus::Pending;
-  resolver_timer_->disableTimer();
-  resolver_timer_->enableTimer(resolve_timeout_ms_);
+
+  if (active_query_ != nullptr) {
+    active_query_->cancel();
+  }
 
   // Resolve the address in the query and add to the resolved_hosts vector
-  resolver_->resolve(
+  active_query_ = resolver_->resolve(
       domain->name_, lookup_family,
       [this](Network::DnsResolver::ResolutionStatus status,
              std::list<Network::DnsResponse>&& response) -> void {
+
+        active_query_ = nullptr;
+
         if (resolution_status_ != DnsFilterResolverStatus::Pending) {
           ENVOY_LOG(debug, "Resolution timed out before callback was executed");
           return;

@@ -73,6 +73,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
   resolver_timeout_ms_ = std::chrono::milliseconds(
       PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, ResolverTimeoutMs));
+
+  // We cannot create the dns server here since the dispatcher loop is running
+  // in a different thread than the one where the filter is created
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
@@ -81,9 +84,10 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
       message_parser_(std::make_unique<DnsMessageParser>()), listener_(callbacks.udpListener())
 
 {
-
-  resolver_ = std::make_unique<DnsFilterResolver>(/*dns_resolver_, */ config->resolver_timeout(),
-                                                  listener_.dispatcher());
+  // Instantiate the dns server here so that the event loop runs in the same thread
+  // as this object
+  auto dns_resolver = listener_.dispatcher().createDnsResolver(config_->resolvers(), false);
+  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver);
 }
 
 absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
@@ -120,7 +124,6 @@ absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_n
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
-  // TODO: Error handling
 
   answer_rec_.release();
 
