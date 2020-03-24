@@ -89,8 +89,10 @@ public:
   absl::optional<std::string> isKnownDomain(const std::string& domain_name);
 
 private:
-  virtual void sendDnsResponse(const Network::UdpRecvData& request_data);
-  virtual DnsAnswerRecordPtr getResponseForQuery();
+  void serializeAndSendResponse(DnsQueryRecordPtr& query,
+                                Network::Address::InstanceConstSharedPtr ipaddr);
+  virtual void sendDnsResponse(DnsAnswerRecordPtr answer);
+  virtual absl::optional<DnsAnswerRecordPtr> getResponseForQuery();
 
   const DnsFilterEnvoyConfigSharedPtr config_;
 
@@ -98,9 +100,14 @@ private:
 
   Network::UdpListener& listener_;
   Runtime::RandomGeneratorImpl rng_;
-  DnsAnswerRecordPtr answer_rec_;
+  // DnsAnswerRecordPtr answer_rec_;
   DnsFilterResolverPtr resolver_;
-  // Network::DnsResolverSharedPtr resolver_;
+
+  Network::Address::InstanceConstSharedPtr local_;
+  Network::Address::InstanceConstSharedPtr peer_;
+  Buffer::OwnedImpl response_;
+  
+  AnswerCallback answer_callback_;
 };
 
 } // namespace DnsFilter

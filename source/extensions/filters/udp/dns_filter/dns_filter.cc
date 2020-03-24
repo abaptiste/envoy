@@ -80,14 +80,32 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
-    : UdpListenerReadFilter(callbacks), config_(config),
-      message_parser_(std::make_unique<DnsMessageParser>()), listener_(callbacks.udpListener())
+    : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener())
 
 {
+  message_parser_ = std::make_unique<DnsMessageParser>(/*response_callback*/);
+
   // Instantiate the dns server here so that the event loop runs in the same thread
   // as this object
+  //
+  // TODO retries
+
+  answer_callback_ = [this](DnsQueryRecordPtr& query,
+                                          Network::Address::InstanceConstSharedPtr ipaddr) -> void {
+    // This callback is executed when the dns resolution completes.  At that time
+    // we build an Address::InstanceConstSharedPtr from one of the addresses returned
+    // and send it to the client
+    serializeAndSendResponse(query, ipaddr);
+  };
+
   auto dns_resolver = listener_.dispatcher().createDnsResolver(config_->resolvers(), false);
-  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver);
+  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver, answer_callback_);
+}
+
+void DnsFilter::serializeAndSendResponse(DnsQueryRecordPtr& query,
+                                Network::Address::InstanceConstSharedPtr ipaddr) {
+    auto answer = message_parser_->buildDnsAnswerRecord(query.get(), 300, ipaddr);
+    sendDnsResponse(std::move(answer));
 }
 
 absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
@@ -125,24 +143,37 @@ absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_n
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
-  answer_rec_.release();
+  // Clear any cruft
+  response_.drain(response_.length());
+
+  // Save the connection endpoints so that we can respond
+  local_ = client_request.addresses_.local_;
+  peer_ = client_request.addresses_.peer_;
 
   // Parse the query
-  if (!message_parser_->parseDnsObject(client_request.buffer_)) {
-    sendDnsResponse(client_request);
+  message_parser_->parseDnsObject(client_request.buffer_);
+
+  // still need to do the resolution
+  auto response = getResponseForQuery();
+  if (!response.has_value()) {
+    // error
+    sendDnsResponse(nullptr);
     return;
   }
 
-  // Determine if the hostname is known
-  answer_rec_ = getResponseForQuery();
-  ENVOY_LOG(trace, "Parsed address for query: {}",
-            answer_rec_ != nullptr ? answer_rec_->ip_addr_->ip()->addressAsString() : "None");
+  auto response_value = std::move(response.value());
 
-  // respond to client
-  sendDnsResponse(client_request);
+  // Externally resolved.  We'll respond to the client when the
+  // DNS resolution callback returns
+  if (response_value == nullptr) {
+    return;
+  }
+
+  // We have an answer. Send it to the client
+  sendDnsResponse(std::move(response_value));
 }
 
-DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
+absl::optional<DnsAnswerRecordPtr> DnsFilter::getResponseForQuery() {
 
   Network::Address::InstanceConstSharedPtr ipaddr = nullptr;
   const auto& queries = message_parser_->getQueries();
@@ -183,77 +214,37 @@ DnsAnswerRecordPtr DnsFilter::getResponseForQuery() {
       ENVOY_LOG(debug, "returning address {} for domain [{}]", ipaddr->ip()->addressAsString(),
                 query->name_);
     }
-
     // We don't have a statically configured record for the domain or it's unknown
     // resolve it externally
     if (ipaddr == nullptr) {
       ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
 
-      // TODO retries
+      // When the callback executes it will execuate a callback to build
+      // a response and send it to the client
       resolver_->resolve_query(query);
-
-      auto resolved_addresses = resolver_->get_resolved_hosts();
-
-      ENVOY_LOG(debug, "Resolved [{}] addresses for [{}]", resolved_addresses.size(), query->name_);
-
-      if (resolved_addresses.empty()) {
-        break;
-      }
-
-      const size_t index = rng_.random() % resolved_addresses.size();
-      ipaddr = resolved_addresses[index];
+      return absl::make_optional<DnsAnswerRecordPtr>(nullptr);
     }
 
-    // Build an answer record with the discovered address
-    ASSERT(ipaddr != nullptr);
-    switch (query->type_) {
-    case DnsRecordType::AAAA:
-      if (ipaddr->ip()->ipv6() == nullptr) {
-        ENVOY_LOG(error, "Unable to return IPV6 address for query");
-        return nullptr;
-      }
-      break;
-
-    case DnsRecordType::A:
-      if (ipaddr->ip()->ipv4() == nullptr) {
-        ENVOY_LOG(error, "Unable to return IPV4 address for query");
-        return nullptr;
-      }
-      break;
-
-    default:
-      ENVOY_LOG(error, "record type [{}] not supported", query->type_);
-      return nullptr;
-    }
-
-    // The answer record could contain types other than IP's. We will support only IP
-    // addresses for the moment
-    return std::make_unique<DnsAnswerRecord>(query->name_, query->type_, query->class_, 300 /*ttl*/,
-                                             ipaddr);
+    return absl::make_optional<DnsAnswerRecordPtr>(
+        message_parser_->buildDnsAnswerRecord(query.get(), 300, ipaddr));
   }
 
-  return nullptr;
+  return absl::nullopt;
 }
 
-void DnsFilter::sendDnsResponse(const Network::UdpRecvData& request_data) {
+void DnsFilter::sendDnsResponse(DnsAnswerRecordPtr answer) {
 
-  Buffer::OwnedImpl response{};
-  if (!message_parser_->buildResponseBuffer(response, answer_rec_)) {
+  if (!message_parser_->buildResponseBuffer(response_, std::move(answer))) {
     // TODO:  Do we send an empty buffer back to the client or
     //        craft a fixed response here? We will need a minimum
     //        of the query id from the request
     ENVOY_LOG(error, "Unable to build a response for the client");
-    response.drain(response.length());
   }
 
-  ENVOY_LOG(trace, "Sending response from: {} to: {}",
-            request_data.addresses_.local_->asStringView(),
-            request_data.addresses_.peer_->asStringView());
+  ENVOY_LOG(trace, "Sending response from: {} to: {}", local_->asStringView(),
+            peer_->asStringView());
 
-  auto local = request_data.addresses_.local_->ip();
-  auto peer = request_data.addresses_.peer_;
-
-  Network::UdpSendData response_data{local, *peer, response};
+  Network::UdpSendData response_data{local_->ip(), *peer_, response_};
   listener_.send(response_data);
 }
 

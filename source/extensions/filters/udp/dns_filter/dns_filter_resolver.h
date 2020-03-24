@@ -8,6 +8,7 @@
 
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
 
+#include "common/runtime/runtime_impl.h"
 #include "absl/synchronization/notification.h"
 
 namespace Envoy {
@@ -21,18 +22,27 @@ enum class DnsFilterResolverStatus { Pending, Complete };
 
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsFilterResolver(Network::DnsResolverSharedPtr resolver)
-      : resolver_(resolver), active_query_(nullptr) {}
+  DnsFilterResolver(Network::DnsResolverSharedPtr resolver, AnswerCallback& callback)
+      : resolver_(resolver), callback_(callback), active_query_(nullptr) {}
 
   virtual ~DnsFilterResolver(){};
-  virtual void resolve_query(const DnsQueryRecordPtr& domain);
-  virtual AddressConstPtrVec& get_resolved_hosts() { return resolved_hosts_; }
-  virtual DnsFilterResolverStatus& get_resolution_status() { return resolution_status_; };
+  virtual void resolve_query(const DnsQueryRecordPtr& domain_query);
+  // virtual AddressConstPtrVec& get_resolved_hosts() { return resolved_hosts_; }
+  // virtual DnsFilterResolverStatus& get_resolution_status() { return resolution_status_; };
 
 private:
+  void invokeCallback(DnsQueryRecordPtr & query_rec,
+                      Network::Address::InstanceConstSharedPtr address) {
+    callback_(query_rec, address);
+  }
+
   const Network::DnsResolverSharedPtr resolver_;
+  AnswerCallback& callback_;
+
+  DnsQueryRecordPtr query_rec_;
   Network::ActiveDnsQuery* active_query_;
 
+  Runtime::RandomGeneratorImpl rng_;
   DnsFilterResolverStatus resolution_status_;
   AddressConstPtrVec resolved_hosts_;
 };

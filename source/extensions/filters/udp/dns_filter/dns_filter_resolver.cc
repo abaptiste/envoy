@@ -7,12 +7,12 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
-
-  resolved_hosts_.clear();
+//  using ResolveCb = std::function<void(ResolutionStatus status, std::list<DnsResponse>&&
+//  response)>;
+void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
   Network::DnsLookupFamily lookup_family;
-  switch (domain->type_) {
+  switch (domain_query->type_) {
   case DnsRecordType::A:
     lookup_family = Network::DnsLookupFamily::V4Only;
     break;
@@ -20,11 +20,11 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
     lookup_family = Network::DnsLookupFamily::V6Only;
     break;
   default:
-    ENVOY_LOG(error, "Unknown query type [{}] for upstream lookup", domain->type_);
+    ENVOY_LOG(error, "Unknown query type [{}] for upstream lookup", domain_query->type_);
     return;
   }
 
-  ENVOY_LOG(trace, "Resolving name [{}]", domain->name_);
+  ENVOY_LOG(trace, "Resolving name [{}]", domain_query->name_);
 
   resolution_status_ = DnsFilterResolverStatus::Pending;
 
@@ -32,12 +32,18 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
     active_query_->cancel();
   }
 
+  // TODO:  Add the timer to get whether the query times out
+ 
+  // TODO:  This is essentially a copy.
+  query_rec_ = std::make_unique<DnsQueryRecord>(domain_query->name_, domain_query->type_,
+                                                domain_query->class_);
+
   // Resolve the address in the query and add to the resolved_hosts vector
+  resolved_hosts_.clear();
   active_query_ = resolver_->resolve(
-      domain->name_, lookup_family,
+      domain_query->name_, lookup_family,
       [this](Network::DnsResolver::ResolutionStatus status,
              std::list<Network::DnsResponse>&& response) -> void {
-
         active_query_ = nullptr;
 
         if (resolution_status_ != DnsFilterResolverStatus::Pending) {
@@ -49,15 +55,22 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain) {
 
         // TODO: Cache returned addresses until TTL expires
         if (status == Network::DnsResolver::ResolutionStatus::Success) {
-          resolved_hosts_.reserve(response.size());
-          for (const auto& resp : response) {
-            ASSERT(resp.address_ != nullptr);
-            ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
-            resolved_hosts_.push_back(Network::Utility::getAddressWithPort(*(resp.address_), 0));
+          //const auto index = rng_.random() % response.size();
 
-            resolution_status_ = DnsFilterResolverStatus::Complete;
-          }
+          auto resp = response.begin();
+          //std::advance(resp, index);
+
+          ASSERT(resp->address_ != nullptr);
+
+          resolved_hosts_.push_back(std::move(resp->address_));
+          ENVOY_LOG(trace, "Received address: {}", resp->address_->ip()->addressAsString());
         }
+
+        auto address = resolved_hosts_.empty() ? nullptr : resolved_hosts_[0];
+        ENVOY_LOG(trace, "Executing callback for [{}][resp {}]: null address [{}]", query_rec_->name_,
+                  resolved_hosts_.size(), address == nullptr ? "true" : "false");
+
+        invokeCallback(query_rec_, address);
       });
 }
 

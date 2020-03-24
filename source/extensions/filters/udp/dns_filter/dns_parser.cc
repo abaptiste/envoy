@@ -14,6 +14,7 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
+// Not upstreamed
 inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                                   const uint64_t offset) {
 
@@ -34,6 +35,7 @@ inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::Instan
   ENVOY_LOG_MISC(trace, "{}\n{}", title, buf);
 }
 
+// Not upstreamed
 inline void DnsObject::dumpFlags(const DnsMessageStruct& queryObj) {
 
   // TODO: We should do no work if the log level is not applicable
@@ -133,26 +135,21 @@ Buffer::OwnedImpl& DnsAnswerRecord::serialize() {
   const auto ip_address = ip_addr_->ip();
 
   if (ip_address->ipv6() != nullptr) {
-
     // Store the 128bit address with 2 64 bit writes
     const absl::uint128 addr6 = ip_address->ipv6()->address();
-
     buffer_.writeBEInt<uint16_t>(sizeof(addr6));
     buffer_.writeLEInt<uint64_t>(absl::Uint128Low64(addr6));
     buffer_.writeLEInt<uint64_t>(absl::Uint128High64(addr6));
-
   } else if (ip_address->ipv4() != nullptr) {
     buffer_.writeBEInt<uint16_t>(4);
     buffer_.writeLEInt<uint32_t>(ip_address->ipv4()->address());
   }
-
   return buffer_;
 }
 
 bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   auto available_bytes = buffer->length();
-  ENVOY_LOG_MISC(debug, "In {} with {} bytes", __func__, available_bytes);
 
   dumpBuffer(__func__, buffer);
 
@@ -236,7 +233,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
   dumpFlags(incoming_);
 
   // Most times we will have only one query here.
-  for (uint16_t index = 0; index < incoming_.questions; index++) {
+  for (auto index = 0; index < incoming_.questions; index++) {
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG_MISC(error, "Couldn't parse query record from buffer");
@@ -246,7 +243,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
   }
 
   // Parse all answer records and store them
-  for (uint16_t index = 0; index < incoming_.answers; index++) {
+  for (auto index = 0; index < incoming_.answers; index++) {
     auto rec = parseDnsAnswerRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG_MISC(error, "Couldn't parse answer record from buffer");
@@ -369,20 +366,20 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
     return nullptr;
   }
 
-  // TODO: Build an
+  // Build an address pointer from the string data.
+  // We don't support anything other than A or AAAA records.  If we add support
+  // for other record types, we must account for them here
   Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
   if (record_type == DnsRecordType::A) {
     sockaddr_in sa4;
     sa4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
-
     ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
-
   } else if (record_type == DnsRecordType::AAAA) {
-
     sockaddr_in6 sa6;
     uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
-    for (size_t index = 0; index < sizeof(absl::uint128) / sizeof(uint8_t); index++) {
+    static constexpr size_t count = sizeof(absl::uint128) / sizeof(uint8_t);
+    for (size_t index = 0; index < count; index++) {
       *address6_bytes++ = buffer->peekLEInt<uint8_t>(data_offset++);
     }
 
@@ -405,6 +402,39 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   auto rec =
       std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl, ip_addr);
   return rec;
+}
+
+DnsAnswerRecordPtr
+DnsObject::buildDnsAnswerRecord(const DnsQueryRecord* query_rec, const uint16_t ttl,
+                                Network::Address::InstanceConstSharedPtr ipaddr) {
+
+  ASSERT(ipaddr != nullptr);
+
+  // Verify that we have an address matching the query record type
+  switch (query_rec->type_) {
+  case DnsRecordType::AAAA:
+    if (ipaddr->ip()->ipv6() == nullptr) {
+      // ENVOY_LOG(error, "Unable to return IPV6 address for query");
+      return nullptr;
+    }
+    break;
+
+  case DnsRecordType::A:
+    if (ipaddr->ip()->ipv4() == nullptr) {
+      // ENVOY_LOG(error, "Unable to return IPV4 address for query");
+      return nullptr;
+    }
+    break;
+
+  default:
+    // ENVOY_LOG(error, "record type [{}] not supported", query_rec->type_);
+    return nullptr;
+  }
+
+  // The answer record could contain types other than IP's. We will support only IP
+  // addresses for the moment
+  return std::make_unique<DnsAnswerRecord>(query_rec->name_, query_rec->type_, query_rec->class_,
+                                           ttl, ipaddr);
 }
 
 DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -498,7 +528,7 @@ void DnsMessageParser::setDnsResponseFlags() {
 // This is the sole function that aggregates all the data and builds
 // the buffer sent back to the client
 bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
-                                           DnsAnswerRecordPtr& answer_record) {
+                                           DnsAnswerRecordPtr answer_record) {
 
   // TODO: We need to track the size of the response so that we can:
   // a) Return more than one address
@@ -539,18 +569,14 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
   }
 
   // serialize the answer records and add to the buffer here
-  for (const auto& answer_rec : answers_) {
-    buffer_.add(answer_rec->serialize());
+  for (const auto& answer : answers_) {
+    buffer_.add(answer->serialize());
   }
 
   return true;
 }
 
 bool DnsMessageParser::parseResponseData(const Buffer::InstancePtr& buffer) {
-  const uint64_t data_length = buffer->length();
-  ENVOY_LOG(debug, "In {} with {} bytes", __func__, data_length);
-
-  dumpBuffer("Response", buffer);
 
   // Successfully able to parse the response
   return parseDnsObject(buffer);
