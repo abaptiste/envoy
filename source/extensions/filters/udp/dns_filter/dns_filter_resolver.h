@@ -16,8 +16,6 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
-
 enum class DnsFilterResolverStatus { Pending, Complete, TimedOut };
 
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
@@ -31,27 +29,26 @@ public:
 
   virtual ~DnsFilterResolver(){};
   virtual void resolve_query(const DnsQueryRecordPtr& domain_query);
-  // virtual AddressConstPtrVec& get_resolved_hosts() { return resolved_hosts_; }
-  // virtual DnsFilterResolverStatus& get_resolution_status() { return resolution_status_; };
 
 private:
-  void invokeCallback(Network::Address::InstanceConstSharedPtr address) {
+  void invokeCallback() {
     // We've timed out. Guard against sending a response
     if (resolution_status_ == DnsFilterResolverStatus::TimedOut) {
       return;
     }
     resolver_timer_->disableTimer();
-    callback_(query_rec_, address);
+    callback_(query_rec_, resolved_hosts_);
   }
 
   void onResolveTimeout() {
-    // If the resolution status is not Pending, we've already completed
-    // the lookup and responded to the client
+    // If the resolution status is not Pending, then we've already completed the lookup and
+    // responded to the client.
     if (resolution_status_ != DnsFilterResolverStatus::Pending) {
       return;
     }
     resolution_status_ = DnsFilterResolverStatus::TimedOut;
-    callback_(query_rec_, nullptr);
+    resolved_hosts_.clear();
+    callback_(query_rec_, resolved_hosts_);
   }
 
   const Network::DnsResolverSharedPtr resolver_;

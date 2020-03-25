@@ -1,6 +1,7 @@
 #include "extensions/filters/udp/dns_filter/dns_filter.h"
 
 #include "envoy/network/listener.h"
+#include "envoy/type/matcher/v3/string.pb.h"
 
 #include "common/common/empty_string.h"
 #include "common/network/address_impl.h"
@@ -21,14 +22,14 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   const auto& server_config = config.server_config();
 
   // TODO: Read the external DataSource
-  if (server_config.has_control_plane_config()) {
+  if (server_config.has_inline_dns_table()) {
 
-    const auto& cp_config = server_config.control_plane_config();
-    const size_t entries = cp_config.virtual_domains().size();
+    const auto& dns_table = server_config.inline_dns_table();
+    const size_t entries = dns_table.virtual_domains().size();
 
     // TODO: support wildcard matching to eventually eliminate having two sets of domains
     virtual_domains_.reserve(entries);
-    for (const auto& virtual_domain : cp_config.virtual_domains()) {
+    for (const auto& virtual_domain : dns_table.virtual_domains()) {
       AddressConstPtrVec addrs{};
 
       if (virtual_domain.endpoint().has_address_list()) {
@@ -40,18 +41,15 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
           addrs.push_back(ipaddr);
         }
       }
-
-      // TODO: Check whether the virtual domain exists in the known domains
-      // and add it to the known domain list if missing?
       virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addrs));
     }
 
     // Add known domains
-    for (const auto& domain : cp_config.known_domains()) {
-      // TODO: Ensure that the known domains don't start with a period
-      if (known_domains_.find(domain) == known_domains_.end()) {
-        known_domains_.emplace(domain);
-      }
+    for (const auto& suffix : dns_table.known_suffixes()) {
+      envoy::type::matcher::v3::StringMatcher matcher;
+      matcher.set_suffix(suffix.suffix());
+      auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(matcher);
+      known_suffixes_.push_back(std::move(matcher_ptr));
     }
   }
 
@@ -78,61 +76,43 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
 {
   message_parser_ = std::make_unique<DnsMessageParser>();
 
-  // Instantiate the dns server here so that the event loop runs in the same thread
-  // as this object
-  //
-  // TODO retries
+  // TODO retries, TTL.
 
   // This callback is executed when the dns resolution completes. At that time
-  // we build an Address::InstanceConstSharedPtr from one of the addresses returned
-  // and send it to the client
-  answer_callback_ = [this](DnsQueryRecordPtr& query,
-                            Network::Address::InstanceConstSharedPtr ipaddr) -> void {
-    auto answer = message_parser_->buildDnsAnswerRecord(query.get(), 300, ipaddr);
-    sendDnsResponse(std::move(answer));
+  // we build an answer record from each IP resolved, then send it to the client
+  answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
+    for (const auto& ip : iplist) {
+      message_parser_->buildDnsAnswerRecord(query, 300, ip);
+    }
+    sendDnsResponse();
   };
 
   resolver_ = std::make_unique<DnsFilterResolver>(
       answer_callback_, config->resolvers(), config->resolver_timeout(), listener_.dispatcher());
 }
 
-absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
+bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
 
-  const auto known_domains = config_->known_domains();
+  const auto& known_suffixes = config_->known_suffixes();
 
-  // If we don't have a list of whitelisted domains, we will immediately
+  // If we don't have a list of whitelisted domain suffixes, we will immediately
   // resolve the name with an upstream DNS server
-  if (known_domains.empty()) {
+  if (known_suffixes.empty()) {
     ENVOY_LOG(trace, "Known domains list is empty");
-    return absl::nullopt;
+    return false;
   }
 
-  // Search for the last dot in the name. If there is no name separator
-  // we don't need any additional logic to handle this case
-  const auto end = domain_name.find_last_of('.');
-
-  // We need to continually strip sub-domains off of the domain_name
-  // until we find a match or reach the last period in the input name
-  auto iter = domain_name.find_first_of('.');
-  while (iter != end) {
-    const std::string subdomain = domain_name.substr(++iter);
-
-    ENVOY_LOG(trace, "Searching for [{}] pos[{}:{}]", subdomain, iter, end);
-
-    auto found = known_domains.find(subdomain);
-    if (found != known_domains.end()) {
-      return absl::make_optional<std::string>(*found);
+  // TODO: Use a trie to find match instead of iterating through the list
+  for (auto& suffix : known_suffixes) {
+    if (suffix->match(domain_name)) {
+      return true;
     }
-
-    iter = domain_name.find_first_of('.', iter);
   }
-  return absl::nullopt;
+
+  return false;
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
-
-  // Clear any cruft
-  response_.drain(response_.length());
 
   // Save the connection endpoints so that we can respond
   local_ = client_request.addresses_.local_;
@@ -140,47 +120,46 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   // Parse the query
   message_parser_->parseDnsObject(client_request.buffer_);
+  message_parser_->clearAnswerRecords();
 
-  // still need to do the resolution
+  // Resolve the requested name
   auto response = getResponseForQuery();
-  if (!response.has_value()) {
-    // error
-    sendDnsResponse(nullptr);
+
+  // We were not able to satisfy the request locally. Return an
+  // empty response to the client
+  if (response == DnsLookupResponse::Failure) {
+    sendDnsResponse();
     return;
   }
 
-  auto response_value = std::move(response.value());
-
   // Externally resolved. We'll respond to the client when the
-  // DNS resolution callback returns
-  if (response_value == nullptr) {
+  // external DNS resolution callback returns
+  if (response == DnsLookupResponse::External) {
     return;
   }
 
   // We have an answer. Send it to the client
-  sendDnsResponse(std::move(response_value));
+  sendDnsResponse();
 }
 
-absl::optional<DnsAnswerRecordPtr> DnsFilter::getResponseForQuery() {
+DnsLookupResponse DnsFilter::getResponseForQuery() {
 
   Network::Address::InstanceConstSharedPtr ipaddr = nullptr;
   const auto& queries = message_parser_->getQueries();
 
-  // It appears to be a rare case where we would have more than
-  // one query in a single request. It is allowed by the protocol
-  // but not widely supported:
+  // It appears to be a rare case where we would have more than one query in a single request. It is
+  // allowed by the protocol but not widely supported:
   //
   // https://stackoverflow.com/a/4083071
 
   const auto& domains = config_->domains();
 
-  // Determine whether we can answer the query
+  // TODO: Do we assert that there is only one query here?
   for (const auto& query : queries) {
 
-    // Try to resolve the query locally. If forwarding the query externally is
-    // disabled we will always attempt to resolve with the configured domains
-    auto known_domain = isKnownDomain(query->name_);
-    if (known_domain.has_value() || !config_->forward_queries()) {
+    // Try to resolve the query locally. If forwarding the query externally is  disabled we will
+    // always attempt to resolve with the configured domains
+    if (isKnownDomain(query->name_) || !config_->forward_queries()) {
 
       // TODO: Determine whether the name is a cluster
 
@@ -188,49 +167,48 @@ absl::optional<DnsAnswerRecordPtr> DnsFilter::getResponseForQuery() {
       const auto iter = domains.find(query->name_);
       if (iter == domains.end()) {
         ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query->name_);
-        break;
+        continue;
       }
 
       const auto& configured_address_list = iter->second;
       if (configured_address_list.empty()) {
         ENVOY_LOG(debug, "Domain [{}] list is empty", query->name_);
-        break;
+        continue;
       }
 
-      const size_t index = rng_.random() % configured_address_list.size();
-      ipaddr = configured_address_list[index];
-      ENVOY_LOG(debug, "returning address {} for domain [{}]", ipaddr->ip()->addressAsString(),
-                query->name_);
+      // Build the answer records from each IP address we have
+      for (const auto& ipaddr : configured_address_list) {
+        ENVOY_LOG(debug, "returning address {} for domain [{}]", ipaddr->ip()->addressAsString(),
+                  query->name_);
+        message_parser_->buildDnsAnswerRecord(query, 300, ipaddr);
+      }
+
+      return DnsLookupResponse::Success;
     }
-    // We don't have a statically configured record for the domain or it's unknown
-    // resolve it externally
+    // We don't have a statically configured record for the domain or it's unknown resolve it
+    // externally
     if (ipaddr == nullptr) {
       ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
 
-      // When the callback executes it will execute a callback to build
-      // a response and send it to the client
+      // When the callback executes it will execute a callback to build a response and send it to
+      // the client
       resolver_->resolve_query(query);
-      return absl::make_optional<DnsAnswerRecordPtr>(nullptr);
-    }
 
-    return absl::make_optional<DnsAnswerRecordPtr>(
-        message_parser_->buildDnsAnswerRecord(query.get(), 300, ipaddr));
+      return DnsLookupResponse::External;
+    }
   }
 
-  return absl::nullopt;
+  // No address found. Response to the client appropriately
+  return DnsLookupResponse::Failure;
 }
 
-void DnsFilter::sendDnsResponse(DnsAnswerRecordPtr answer) {
+void DnsFilter::sendDnsResponse() {
+  // Clear any cruft in the outgoing buffer
+  response_.drain(response_.length());
 
-  if (!message_parser_->buildResponseBuffer(response_, std::move(answer))) {
-    // TODO:  Do we send an empty buffer back to the client or
-    //        craft a fixed response here? We will need a minimum
-    //        of the query id from the request
+  if (!message_parser_->buildResponseBuffer(response_)) {
     ENVOY_LOG(error, "Unable to build a response for the client");
   }
-
-  ENVOY_LOG(trace, "Sending response from: {} to: {}", local_->asStringView(),
-            peer_->asStringView());
 
   Network::UdpSendData response_data{local_->ip(), *peer_, response_};
   listener_.send(response_data);
@@ -238,7 +216,7 @@ void DnsFilter::sendDnsResponse(DnsAnswerRecordPtr answer) {
 
 void DnsFilter::onReceiveError(Api::IoError::IoErrorCode error_code) {
   // config_->stats().downstream_sess_rx_errors_.inc();
-  (void)error_code;
+  UNREFERENCED_PARAMETER(error_code);
 }
 
 } // namespace DnsFilter

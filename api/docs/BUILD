@@ -111,6 +111,7 @@ proto_library(
         "//envoy/data/accesslog/v2:pkg",
         "//envoy/data/cluster/v2alpha:pkg",
         "//envoy/data/core/v2alpha:pkg",
+        "//envoy/data/dns/v2alpha:pkg",
         "//envoy/data/tap/v2alpha:pkg",
         "//envoy/service/accesslog/v2:pkg",
         "//envoy/service/auth/v2:pkg",

@@ -33,12 +33,14 @@ envoy_cc_library(
         "//include/envoy/network:listener_interface",
         "//source/common/buffer:buffer_lib",
         "//source/common/common:empty_string",
+        "//source/common/common:matchers_lib",
         "//source/common/config:config_provider_lib",
         "//source/common/network:address_lib",
         "//source/common/network:utility_lib",
         "//source/common/runtime:runtime_lib",
         "//source/common/upstream:cluster_manager_lib",
         "@envoy_api//envoy/config/filter/udp/dns_filter/v2alpha:pkg_cc_proto",
+        "@envoy_api//envoy/type/matcher/v3:pkg_cc_proto",
     ],
 )
 

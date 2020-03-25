@@ -126,11 +126,7 @@ Buffer::OwnedImpl& DnsAnswerRecord::serialize() {
   buffer_.writeBEInt<uint32_t>(ttl_);
 
   // Convert address and serialize
-  if (ip_addr_ == nullptr) {
-    // do what?
-    ENVOY_LOG_MISC(error, "Invalid address pointer when serializing record");
-    return buffer_;
-  }
+  ASSERT(ip_addr_ != nullptr);
 
   const auto ip_address = ip_addr_->ip();
 
@@ -151,6 +147,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   auto available_bytes = buffer->length();
 
+  // TODO: Remove before pushing upstream
   dumpBuffer(__func__, buffer);
 
   memset(&incoming_, 0x00, sizeof(incoming_));
@@ -221,15 +218,14 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
     }
   }
 
-  // Verify that we still have available data in the buffer to read
-  // answer and query records
+  // Verify that we still have available data in the buffer to read answer and query records
   if (offset > buffer->length()) {
     ENVOY_LOG_MISC(error, "Data offset[{}] is larget than buffer size[{}]. Returning false", offset,
                    buffer->length());
     return false;
   }
 
-  // DEBUG
+  // TODO: Remove before pushing upstream
   dumpFlags(incoming_);
 
   // Most times we will have only one query here.
@@ -267,19 +263,19 @@ const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffe
     *available_bytes -= sizeof(unsigned char);
 
     if (c == 0xc0) {
-      // This is a compressed response. Get the offset in the query record
-      // where the domain name begins
+      // This is a compressed response. Get the offset in the query record where the domain name
+      // begins
       c = buffer->peekBEInt<unsigned char>(*name_offset);
 
-      // We will restart the loop from this offset and read until we encounter
-      // a null byte signifying the end of the name
+      // We will restart the loop from this offset and read until we encounter a null byte
+      // signifying the end of the name
       *name_offset = static_cast<uint64_t>(c);
 
       continue;
 
     } else if (c == 0x00) {
       // We've reached the end of the query.
-      ENVOY_LOG_MISC(debug, "End of name: {}", c, *name_offset);
+      ENVOY_LOG_MISC(trace, "End of name: {}", c, *name_offset);
       break;
     }
 
@@ -335,25 +331,25 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
     return nullptr;
   }
 
-  //  Parse the type
+  //  Parse the record type
   uint16_t record_type;
   record_type = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(record_type);
   available_bytes -= sizeof(record_type);
 
-  //  Parse the class
+  //  Parse the record class
   uint16_t record_class;
   record_class = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(record_class);
   available_bytes -= sizeof(record_class);
 
-  //  Parse the TTL
+  //  Parse the record TTL
   uint32_t ttl;
   ttl = buffer->peekBEInt<uint32_t>(data_offset);
   data_offset += sizeof(ttl);
   available_bytes -= sizeof(ttl);
 
-  //  Parse the Data Length and Data record
+  //  Parse the Data Length and address data record
   uint16_t data_length;
   data_length = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(data_length);
@@ -367,8 +363,8 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   }
 
   // Build an address pointer from the string data.
-  // We don't support anything other than A or AAAA records. If we add support
-  // for other record types, we must account for them here
+  // We don't support anything other than A or AAAA records. If we add support for other record
+  // types, we must account for them here
   Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
   if (record_type == DnsRecordType::A) {
@@ -388,56 +384,49 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
 
   data_offset += data_length;
 
+  ASSERT(ip_addr != nullptr);
   ENVOY_LOG_MISC(debug, "Parsed address [{}] from record type [{}]",
                  ip_addr->ip()->addressAsString(), record_type);
 
-  // If we don't have either cname or an ip address, it's likely an unsupported record
-  if (ip_addr == nullptr) {
-    ENVOY_LOG_MISC(error, "Could not parse address from record");
-    return nullptr;
-  }
-
   *offset = data_offset;
 
-  auto rec =
-      std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl, ip_addr);
-  return rec;
+  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl, ip_addr);
 }
 
-DnsAnswerRecordPtr
-DnsObject::buildDnsAnswerRecord(const DnsQueryRecord* query_rec, const uint16_t ttl,
-                                Network::Address::InstanceConstSharedPtr ipaddr) {
+void DnsObject::buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const uint16_t ttl,
+                                     Network::Address::InstanceConstSharedPtr ipaddr) {
 
   // If the DNS resolution times out, this could be called with a NULL ip address
   if (ipaddr == nullptr) {
-    return nullptr;
+    return;
   }
 
   // Verify that we have an address matching the query record type
   switch (query_rec->type_) {
   case DnsRecordType::AAAA:
     if (ipaddr->ip()->ipv6() == nullptr) {
-      // ENVOY_LOG(error, "Unable to return IPV6 address for query");
-      return nullptr;
+      ENVOY_LOG_MISC(error, "Unable to return IPV6 address for query");
+      return;
     }
     break;
 
   case DnsRecordType::A:
     if (ipaddr->ip()->ipv4() == nullptr) {
-      // ENVOY_LOG(error, "Unable to return IPV4 address for query");
-      return nullptr;
+      ENVOY_LOG_MISC(error, "Unable to return IPV4 address for query");
+      return;
     }
     break;
 
   default:
-    // ENVOY_LOG(error, "record type [{}] not supported", query_rec->type_);
-    return nullptr;
+    ENVOY_LOG_MISC(error, "record type [{}] not supported", query_rec->type_);
+    return;
   }
 
-  // The answer record could contain types other than IP's. We will support only IP
-  // addresses for the moment
-  return std::make_unique<DnsAnswerRecord>(query_rec->name_, query_rec->type_, query_rec->class_,
-                                           ttl, ipaddr);
+  // The answer record could contain types other than IP's. We will support only IP addresses for
+  // the moment
+  auto answer_record = std::make_unique<DnsAnswerRecord>(query_rec->name_, query_rec->type_,
+                                                         query_rec->class_, ttl, ipaddr);
+  answers_.push_back(std::move(answer_record));
 }
 
 DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -468,7 +457,10 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
   record_class = buffer->peekBEInt<uint16_t>(name_offset);
   name_offset += sizeof(record_class);
 
-  auto rec = std::make_unique<DnsQueryRecord>(record_name, record_type, record_class);
+  // This is shared because we use the query list when building the response for the client
+  // and the async resolver returns this data in its response to build the answer. Using a shared
+  // pointer avoids duplicating this data in the asynchronous resolution path
+  auto rec = std::make_shared<DnsQueryRecord>(record_name, record_type, record_class);
 
   // stop reading here since we aren't parsing additional records
   ENVOY_LOG_MISC(trace, "Extracted query record. Name: {} type: {} class: {}", rec->name_,
@@ -524,65 +516,40 @@ void DnsMessageParser::setDnsResponseFlags() {
   generated_.authority_rrs = 0;
   generated_.additional_rrs = 0;
 
-  // DEBUG
+  // TODO: Remove before pushing upstream
   dumpFlags(generated_);
 }
 
-// This is the sole function that aggregates all the data and builds
-// the buffer sent back to the client
-bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer_,
-                                           DnsAnswerRecordPtr answer_record) {
+bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
 
   // TODO: We need to track the size of the response so that we can:
   // a) Return more than one address
   // b) Be absolutely certain we remain under the 512 byte response limit
-  // static constexpr auto buffer_size_limit = 512;
+  // Reference: https://tools.ietf.org/html/rfc6891#page-5
 
   // Build the response and send it on the connection
-  ENVOY_LOG(debug, "In {} with address [{}]", __func__,
-            answer_record != nullptr ? answer_record->ip_addr_->ip()->addressAsString()
-                                     : "Nothing");
-
-  answers_.clear();
-  if (answer_record != nullptr) {
-    answers_.push_back(std::move(answer_record));
-  }
-
-  // Clear any left over cruft
-  buffer_.drain(buffer_.length());
-
   setDnsResponseFlags();
 
-  buffer_.writeBEInt<uint16_t>(generated_.id);
-  buffer_.writeBEInt<uint16_t>(generated_.f.val);
-  buffer_.writeBEInt<uint16_t>(generated_.questions);
-  buffer_.writeBEInt<uint16_t>(generated_.answers);
-  buffer_.writeBEInt<uint16_t>(generated_.authority_rrs);
-  buffer_.writeBEInt<uint16_t>(generated_.additional_rrs);
+  buffer.writeBEInt<uint16_t>(generated_.id);
+  buffer.writeBEInt<uint16_t>(generated_.f.val);
+  buffer.writeBEInt<uint16_t>(generated_.questions);
+  buffer.writeBEInt<uint16_t>(generated_.answers);
+  buffer.writeBEInt<uint16_t>(generated_.authority_rrs);
+  buffer.writeBEInt<uint16_t>(generated_.additional_rrs);
 
   // Copy the query that we are answering into to the response
-
-  // TODO: Find a way to copy this from the original buffer so that we aren't
-  // re-serializing the data. We do this for a couple reasons. Pointer ownership
-  // gets a bit hairy when trying to store an offset and a pointer to the original
-  // buffer. Secondly, if there are additional records in the original query
-  // we aren't parsing those, so we don't know the complete length of the query.
+  // TODO: Find a way to copy this from the original buffer so that we aren't re-serializing the
+  // data.
   if (!queries_.empty()) {
-    buffer_.add(queries_.front()->serialize());
+    buffer.add(queries_.front()->serialize());
   }
 
-  // serialize the answer records and add to the buffer here
+  // Serialize the answer records and add to the buffer here.
   for (const auto& answer : answers_) {
-    buffer_.add(answer->serialize());
+    buffer.add(answer->serialize());
   }
 
   return true;
-}
-
-bool DnsMessageParser::parseResponseData(const Buffer::InstancePtr& buffer) {
-
-  // Successfully able to parse the response
-  return parseDnsObject(buffer);
 }
 
 } // namespace DnsFilter

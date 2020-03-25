@@ -7,8 +7,6 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-//  using ResolveCb = std::function<void(ResolutionStatus status, std::list<DnsResponse>&&
-//  response)>;
 void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
   Network::DnsLookupFamily lookup_family;
@@ -32,11 +30,7 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
     active_query_->cancel();
   }
 
-  // TODO:  Add the timer to get whether the query times out
-
-  // TODO:  This is essentially a copy.
-  query_rec_ = std::make_unique<DnsQueryRecord>(domain_query->name_, domain_query->type_,
-                                                domain_query->class_);
+  query_rec_ = domain_query;
 
   resolver_timer_->disableTimer();
   resolver_timer_->enableTimer(timeout_);
@@ -56,24 +50,19 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
         ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
 
-        // TODO: Cache returned addresses until TTL expires
+        // TODO: Cache returned addresses until TTL expires. C-ares doesn't expose the TTL in the
+        // data available here.
         if (status == Network::DnsResolver::ResolutionStatus::Success) {
-          // const auto index = rng_.random() % response.size();
-
-          auto resp = response.begin();
-          // std::advance(resp, index);
-
-          ASSERT(resp->address_ != nullptr);
-
-          resolved_hosts_.push_back(std::move(resp->address_));
-          ENVOY_LOG(trace, "Received address: {}", resp->address_->ip()->addressAsString());
+          for (const auto resp : response) {
+            ASSERT(resp.address_ != nullptr);
+            ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
+            resolved_hosts_.push_back(std::move(resp.address_));
+          }
         }
-
-        auto address = resolved_hosts_.empty() ? nullptr : resolved_hosts_[0];
 
         // We are processing the response, so we cannot timeout. Cancel the timer
         resolver_timer_->disableTimer();
-        invokeCallback(address);
+        invokeCallback();
       });
 }
 

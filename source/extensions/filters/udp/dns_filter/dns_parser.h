@@ -87,7 +87,7 @@ public:
   virtual Buffer::OwnedImpl& serialize();
 };
 
-using DnsQueryRecordPtr = std::unique_ptr<DnsQueryRecord>;
+using DnsQueryRecordPtr = std::shared_ptr<DnsQueryRecord>;
 using DnsQueryList = std::list<DnsQueryRecordPtr>;
 
 class DnsAnswerRecord : public BaseDnsRecord {
@@ -117,27 +117,32 @@ enum class DnsQueryParseState {
   FINISH
 };
 
-using AnswerCallback =
-    std::function<void(DnsQueryRecordPtr& query, Network::Address::InstanceConstSharedPtr ipaddr)>;
+using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
+using AnswerCallback = std::function<void(DnsQueryRecordPtr& query, AddressConstPtrVec& ipaddr)>;
+
+class DnsMessageParser;
 
 class DnsObject {
 
 public:
-  DnsObject(/*ResponseCallback& response_callback*/)
-      : queries_(), answers_() /*, callback_(response_callback) */ {}
+  DnsObject() : queries_(), answers_() {}
   virtual ~DnsObject(){};
 
   virtual bool parseDnsObject(const Buffer::InstancePtr& buffer);
+
   virtual DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
                                                 uint64_t* offset);
+
   virtual DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
                                                   uint64_t* offset);
 
-  virtual DnsAnswerRecordPtr buildDnsAnswerRecord(const DnsQueryRecord* query_rec,
-                                                  const uint16_t ttl,
-                                                  Network::Address::InstanceConstSharedPtr ipaddr);
+  virtual void buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const uint16_t ttl,
+                                    Network::Address::InstanceConstSharedPtr ipaddr);
+
+  virtual void clearAnswerRecords() { answers_.clear(); }
 
   virtual const DnsQueryList& getQueries() { return queries_; }
+
   virtual const DnsAnswerList& getAnswers() { return answers_; }
 
   virtual uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.f.flags.rcode); }
@@ -148,25 +153,26 @@ public:
 
   void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                   const uint64_t offset = 0);
+
   void dumpFlags(const DnsMessageStruct& queryObj);
+
+private:
+  friend class DnsMessageParser;
+
+  const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
+                                       uint64_t* name_offset);
 
   DnsMessageStruct incoming_;
   DnsMessageStruct generated_;
 
   DnsQueryList queries_;
   DnsAnswerList answers_;
-
-private:
-  const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
-                                       uint64_t* name_offset);
-  // ResponseCallback& callback_;
 };
 
 class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
 public:
   DnsAnswerRecordPtr getResponseForQuery();
-  bool buildResponseBuffer(Buffer::OwnedImpl& buffer, DnsAnswerRecordPtr answer_rec);
-  bool parseResponseData(const Buffer::InstancePtr& buffer);
+  bool buildResponseBuffer(Buffer::OwnedImpl& buffer);
 
 private:
   void setDnsResponseFlags();

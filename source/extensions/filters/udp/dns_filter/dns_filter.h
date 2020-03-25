@@ -7,6 +7,7 @@
 #include "envoy/upstream/cluster_manager.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/common/matchers.h"
 #include "common/config/config_provider_impl.h"
 #include "common/network/utility.h"
 #include "common/runtime/runtime_impl.h"
@@ -41,7 +42,6 @@ struct DnsFilterStats {
   ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT)
 };
 
-using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
 using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrVec>;
 
 class DnsFilterEnvoyConfig {
@@ -52,7 +52,7 @@ public:
 
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
-  absl::flat_hash_set<std::string>& known_domains() const { return known_domains_; }
+  std::list<Matchers::StringMatcherPtr>& known_suffixes() const { return known_suffixes_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forward_queries() const { return forward_queries_; }
   std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
@@ -65,32 +65,33 @@ private:
 
   Stats::Scope& root_scope;
   Upstream::ClusterManager& cluster_manager_;
+  Network::DnsResolverSharedPtr resolver_;
 
   mutable DnsFilterStats stats_;
   mutable DnsVirtualDomainConfig virtual_domains_;
-  mutable absl::flat_hash_set<std::string> known_domains_;
+  mutable std::list<Matchers::StringMatcherPtr> known_suffixes_;
   bool forward_queries_;
   mutable AddressConstPtrVec resolvers_;
-  Network::DnsResolverSharedPtr resolver_;
   mutable std::chrono::milliseconds resolver_timeout_ms_;
 };
 
 using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
+
+enum class DnsLookupResponse { Success, Failure, External };
 
 class DnsFilter : public Network::UdpListenerReadFilter, Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
             const DnsFilterEnvoyConfigSharedPtr& config);
 
-  // Network::UdpListenerReadFilter callbacks
   void onData(Network::UdpRecvData& client_request) override;
   void onReceiveError(Api::IoError::IoErrorCode error_code) override;
 
-  absl::optional<std::string> isKnownDomain(const std::string& domain_name);
+  bool isKnownDomain(const absl::string_view domain_name);
 
 private:
-  virtual void sendDnsResponse(DnsAnswerRecordPtr answer);
-  virtual absl::optional<DnsAnswerRecordPtr> getResponseForQuery();
+  virtual void sendDnsResponse();
+  virtual DnsLookupResponse getResponseForQuery();
 
   const DnsFilterEnvoyConfigSharedPtr config_;
 
