@@ -5,10 +5,10 @@
 #include "envoy/network/dns.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/runtime/runtime_impl.h"
 
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
 
-#include "common/runtime/runtime_impl.h"
 #include "absl/synchronization/notification.h"
 
 namespace Envoy {
@@ -18,12 +18,16 @@ namespace DnsFilter {
 
 using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
 
-enum class DnsFilterResolverStatus { Pending, Complete };
+enum class DnsFilterResolverStatus { Pending, Complete, TimedOut };
 
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsFilterResolver(Network::DnsResolverSharedPtr resolver, AnswerCallback& callback)
-      : resolver_(resolver), callback_(callback), active_query_(nullptr) {}
+  DnsFilterResolver(AnswerCallback& callback, AddressConstPtrVec resolvers,
+                    std::chrono::milliseconds& timeout, Event::Dispatcher& dispatcher)
+      : resolver_(dispatcher.createDnsResolver(resolvers, false /* use tcp for lookups */)),
+        callback_(callback), timeout_(timeout),
+        resolver_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
+        active_query_(nullptr) {}
 
   virtual ~DnsFilterResolver(){};
   virtual void resolve_query(const DnsQueryRecordPtr& domain_query);
@@ -31,13 +35,29 @@ public:
   // virtual DnsFilterResolverStatus& get_resolution_status() { return resolution_status_; };
 
 private:
-  void invokeCallback(DnsQueryRecordPtr & query_rec,
-                      Network::Address::InstanceConstSharedPtr address) {
-    callback_(query_rec, address);
+  void invokeCallback(Network::Address::InstanceConstSharedPtr address) {
+    // We've timed out. Guard against sending a response
+    if (resolution_status_ == DnsFilterResolverStatus::TimedOut) {
+      return;
+    }
+    resolver_timer_->disableTimer();
+    callback_(query_rec_, address);
+  }
+
+  void onResolveTimeout() {
+    // If the resolution status is not Pending, we've already completed
+    // the lookup and responded to the client
+    if (resolution_status_ != DnsFilterResolverStatus::Pending) {
+      return;
+    }
+    resolution_status_ = DnsFilterResolverStatus::TimedOut;
+    callback_(query_rec_, nullptr);
   }
 
   const Network::DnsResolverSharedPtr resolver_;
   AnswerCallback& callback_;
+  std::chrono::milliseconds timeout_;
+  Event::TimerPtr resolver_timer_;
 
   DnsQueryRecordPtr query_rec_;
   Network::ActiveDnsQuery* active_query_;

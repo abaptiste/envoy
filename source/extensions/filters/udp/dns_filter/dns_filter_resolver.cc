@@ -33,10 +33,13 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
   }
 
   // TODO:  Add the timer to get whether the query times out
- 
+
   // TODO:  This is essentially a copy.
   query_rec_ = std::make_unique<DnsQueryRecord>(domain_query->name_, domain_query->type_,
                                                 domain_query->class_);
+
+  resolver_timer_->disableTimer();
+  resolver_timer_->enableTimer(timeout_);
 
   // Resolve the address in the query and add to the resolved_hosts vector
   resolved_hosts_.clear();
@@ -55,10 +58,10 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
         // TODO: Cache returned addresses until TTL expires
         if (status == Network::DnsResolver::ResolutionStatus::Success) {
-          //const auto index = rng_.random() % response.size();
+          // const auto index = rng_.random() % response.size();
 
           auto resp = response.begin();
-          //std::advance(resp, index);
+          // std::advance(resp, index);
 
           ASSERT(resp->address_ != nullptr);
 
@@ -67,10 +70,10 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
         }
 
         auto address = resolved_hosts_.empty() ? nullptr : resolved_hosts_[0];
-        ENVOY_LOG(trace, "Executing callback for [{}][resp {}]: null address [{}]", query_rec_->name_,
-                  resolved_hosts_.size(), address == nullptr ? "true" : "false");
 
-        invokeCallback(query_rec_, address);
+        // We are processing the response, so we cannot timeout. Cancel the timer
+        resolver_timer_->disableTimer();
+        invokeCallback(address);
       });
 }
 

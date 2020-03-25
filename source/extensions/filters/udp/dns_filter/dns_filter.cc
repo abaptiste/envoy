@@ -16,20 +16,17 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     : root_scope(context.scope()), cluster_manager_(context.clusterManager()),
       stats_(generateStats(config.stat_prefix(), root_scope)) {
 
-  static constexpr uint64_t ResolverTimeoutMs = 500;
-
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
-  // store configured data for server context
   const auto& server_config = config.server_config();
 
+  // TODO: Read the external DataSource
   if (server_config.has_control_plane_config()) {
 
     const auto& cp_config = server_config.control_plane_config();
     const size_t entries = cp_config.virtual_domains().size();
 
-    // TODO: Investigate how easy it would be to support wildcard
-    // matching so that we can eliminate having two sets of domains
+    // TODO: support wildcard matching to eventually eliminate having two sets of domains
     virtual_domains_.reserve(entries);
     for (const auto& virtual_domain : cp_config.virtual_domains()) {
       AddressConstPtrVec addrs{};
@@ -44,7 +41,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
         }
       }
 
-      // TODO: Should we check whether the virtual domain exists in the known domains
+      // TODO: Check whether the virtual domain exists in the known domains
       // and add it to the known domain list if missing?
       virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addrs));
     }
@@ -58,11 +55,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
   }
 
-  // TODO: store configured data for client context
   const auto& client_config = config.client_config();
   forward_queries_ = client_config.forward_query();
   if (forward_queries_) {
-    // Instantiate resolver with external servers
     const auto& upstream_resolvers = client_config.upstream_resolvers();
     resolvers_.reserve(upstream_resolvers.size());
     for (const auto& resolver : upstream_resolvers) {
@@ -71,11 +66,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
   }
 
+  static constexpr uint64_t DefaultResolverTimeoutMs = 500;
   resolver_timeout_ms_ = std::chrono::milliseconds(
-      PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, ResolverTimeoutMs));
-
-  // We cannot create the dns server here since the dispatcher loop is running
-  // in a different thread than the one where the filter is created
+      PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, DefaultResolverTimeoutMs));
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
@@ -83,29 +76,24 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener())
 
 {
-  message_parser_ = std::make_unique<DnsMessageParser>(/*response_callback*/);
+  message_parser_ = std::make_unique<DnsMessageParser>();
 
   // Instantiate the dns server here so that the event loop runs in the same thread
   // as this object
   //
   // TODO retries
 
+  // This callback is executed when the dns resolution completes. At that time
+  // we build an Address::InstanceConstSharedPtr from one of the addresses returned
+  // and send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query,
-                                          Network::Address::InstanceConstSharedPtr ipaddr) -> void {
-    // This callback is executed when the dns resolution completes.  At that time
-    // we build an Address::InstanceConstSharedPtr from one of the addresses returned
-    // and send it to the client
-    serializeAndSendResponse(query, ipaddr);
-  };
-
-  auto dns_resolver = listener_.dispatcher().createDnsResolver(config_->resolvers(), false);
-  resolver_ = std::make_unique<DnsFilterResolver>(dns_resolver, answer_callback_);
-}
-
-void DnsFilter::serializeAndSendResponse(DnsQueryRecordPtr& query,
-                                Network::Address::InstanceConstSharedPtr ipaddr) {
+                            Network::Address::InstanceConstSharedPtr ipaddr) -> void {
     auto answer = message_parser_->buildDnsAnswerRecord(query.get(), 300, ipaddr);
     sendDnsResponse(std::move(answer));
+  };
+
+  resolver_ = std::make_unique<DnsFilterResolver>(
+      answer_callback_, config->resolvers(), config->resolver_timeout(), listener_.dispatcher());
 }
 
 absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_name) {
@@ -119,7 +107,7 @@ absl::optional<std::string> DnsFilter::isKnownDomain(const std::string& domain_n
     return absl::nullopt;
   }
 
-  // Search for the last dot in the name.  If there is no name separator
+  // Search for the last dot in the name. If there is no name separator
   // we don't need any additional logic to handle this case
   const auto end = domain_name.find_last_of('.');
 
@@ -163,7 +151,7 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   auto response_value = std::move(response.value());
 
-  // Externally resolved.  We'll respond to the client when the
+  // Externally resolved. We'll respond to the client when the
   // DNS resolution callback returns
   if (response_value == nullptr) {
     return;
@@ -189,7 +177,7 @@ absl::optional<DnsAnswerRecordPtr> DnsFilter::getResponseForQuery() {
   // Determine whether we can answer the query
   for (const auto& query : queries) {
 
-    // Try to resolve the query locally.  If forwarding the query externally is
+    // Try to resolve the query locally. If forwarding the query externally is
     // disabled we will always attempt to resolve with the configured domains
     auto known_domain = isKnownDomain(query->name_);
     if (known_domain.has_value() || !config_->forward_queries()) {
@@ -219,7 +207,7 @@ absl::optional<DnsAnswerRecordPtr> DnsFilter::getResponseForQuery() {
     if (ipaddr == nullptr) {
       ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
 
-      // When the callback executes it will execuate a callback to build
+      // When the callback executes it will execute a callback to build
       // a response and send it to the client
       resolver_->resolve_query(query);
       return absl::make_optional<DnsAnswerRecordPtr>(nullptr);

@@ -14,7 +14,7 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-// Not upstreamed
+// Don't push upstream
 inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                                   const uint64_t offset) {
 
@@ -35,7 +35,7 @@ inline void DnsObject::dumpBuffer(const std::string& title, const Buffer::Instan
   ENVOY_LOG_MISC(trace, "{}\n{}", title, buf);
 }
 
-// Not upstreamed
+// Don't push upstream
 inline void DnsObject::dumpFlags(const DnsMessageStruct& queryObj) {
 
   // TODO: We should do no work if the log level is not applicable
@@ -367,7 +367,7 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   }
 
   // Build an address pointer from the string data.
-  // We don't support anything other than A or AAAA records.  If we add support
+  // We don't support anything other than A or AAAA records. If we add support
   // for other record types, we must account for them here
   Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
@@ -408,7 +408,10 @@ DnsAnswerRecordPtr
 DnsObject::buildDnsAnswerRecord(const DnsQueryRecord* query_rec, const uint16_t ttl,
                                 Network::Address::InstanceConstSharedPtr ipaddr) {
 
-  ASSERT(ipaddr != nullptr);
+  // If the DNS resolution times out, this could be called with a NULL ip address
+  if (ipaddr == nullptr) {
+    return nullptr;
+  }
 
   // Verify that we have an address matching the query record type
   switch (query_rec->type_) {
