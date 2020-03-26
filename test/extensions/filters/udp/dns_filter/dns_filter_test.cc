@@ -5,6 +5,7 @@
 
 #include "extensions/filters/udp/dns_filter/dns_filter.h"
 
+#include "test/mocks/event/mocks.h"
 #include "test/mocks/server/mocks.h"
 #include "test/test_common/environment.h"
 
@@ -14,6 +15,7 @@
 using testing::AtLeast;
 using testing::ByMove;
 using testing::InSequence;
+using testing::Mock;
 using testing::Return;
 using testing::ReturnRef;
 using testing::SaveArg;
@@ -29,6 +31,7 @@ Api::IoCallUint64Result makeNoError(uint64_t rc) {
   no_error.rc_ = rc;
   return no_error;
 }
+static constexpr uint64_t MAX_UDP_DNS_SIZE{512};
 
 class DnsFilterTest : public testing::Test {
 public:
@@ -46,6 +49,8 @@ public:
               response_ptr->move(send_data.buffer_);
               return makeNoError(response_ptr->length());
             }));
+
+    EXPECT_CALL(callbacks_.udp_listener_, dispatcher()).WillRepeatedly(ReturnRef(dispatcher_));
   }
 
   ~DnsFilterTest() { EXPECT_CALL(callbacks_.udp_listener_, onDestroy()); }
@@ -57,6 +62,10 @@ public:
     EXPECT_CALL(listener_factory_, scope()).WillOnce(ReturnRef(*store));
     EXPECT_CALL(listener_factory_, dispatcher()).Times(AtLeast(0));
     EXPECT_CALL(listener_factory_, clusterManager()).Times(AtLeast(0));
+
+    resolver_ = std::make_shared<Network::MockDnsResolver>();
+    EXPECT_CALL(dispatcher_, createDnsResolver(_, _)).WillOnce(Return(resolver_));
+    EXPECT_CALL(dispatcher_, createTimer_(_)).Times(AtLeast(0));
 
     config_ = std::make_shared<DnsFilterEnvoyConfig>(listener_factory_, config);
     filter_ = std::make_unique<DnsFilter>(callbacks_, config_);
@@ -148,16 +157,54 @@ public:
   Event::MockDispatcher dispatcher_;
   std::shared_ptr<Network::MockDnsResolver> resolver_;
 
-  const std::string config_yaml = R"EOF(
+  // This config has external resolution disabled and is used to verify local lookups.  With
+  // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
+  // each test.
+  const std::string forward_query_off_config = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
   forward_query: false
+  upstream_resolvers:
+  - "1.1.1.1"
+  - "8.8.8.8"
+  - "8.8.4.4"
+server_config:
+  inline_dns_table:
+    external_retry_count: 3
+    known_suffixes:
+    - suffix: foo1.com
+    - suffix: foo2.com
+    virtual_domains:
+    - name: "www.foo1.com"
+      endpoint:
+        address_list:
+          address:
+          - 10.0.0.1
+          - 10.0.0.2
+    - name: "www.foo2.com"
+      endpoint:
+        address_list:
+          address:
+            - 2001:8a:c1::2800:7
+    - name: "www.foo3.com"
+      endpoint:
+        address_list:
+          address:
+            - 10.0.3.1
+  )EOF";
+
+  // This config has external resolution enabled.  Each test must setup the mock to save and execute
+  // the resolver callback
+  const std::string forward_query_on_config = R"EOF(
+stat_prefix: "my_prefix"
+client_config:
+  forward_query: true
   upstream_resolvers:
     - "1.1.1.1"
     - "8.8.8.8"
     - "8.8.4.4"
 server_config:
-  control_plane_config:
+  inline_dns_table:
     external_retry_count: 3
     virtual_domains:
       - name: "www.foo1.com"
@@ -165,29 +212,18 @@ server_config:
           address_list:
             address:
               - 10.0.0.1
-              - 10.0.0.2
-      - name: "www.foo2.com"
-        endpoint:
-          address_list:
-            address:
-              - 2001:8a:c1::2800:7
-      - name: "www.foo3.com"
-        endpoint:
-          address_list:
-            address:
-              - 10.0.3.1
   )EOF";
 };
 
 TEST_F(DnsFilterTest, InvalidQuery) {
   InSequence s;
 
-  setup(config_yaml);
+  setup(forward_query_off_config);
 
   // TODO: Validate that the response is addressed to this client
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
-  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+  ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(0, response_parser_.getQueries().size());
   ASSERT_EQ(0, response_parser_.getAnswers().size());
@@ -197,7 +233,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 TEST_F(DnsFilterTest, SingleTypeAQuery) {
   InSequence s;
 
-  setup(config_yaml);
+  setup(forward_query_off_config);
 
   const std::string query =
       buildQueryForDomain("www.foo3.com", DnsRecordType::A, DnsRecordClass::IN);
@@ -205,7 +241,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+  ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
   ASSERT_EQ(1, response_parser_.getAnswers().size());
@@ -222,7 +258,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
   InSequence s;
 
-  setup(config_yaml);
+  setup(forward_query_off_config);
 
   const std::string query =
       buildQueryForDomain("www.foo2.com", DnsRecordType::A, DnsRecordClass::IN);
@@ -230,7 +266,7 @@ TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+  ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
   ASSERT_EQ(0, response_parser_.getAnswers().size());
@@ -240,7 +276,7 @@ TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
 TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
   InSequence s;
 
-  setup(config_yaml);
+  setup(forward_query_off_config);
 
   const std::string query =
       buildQueryForDomain("www.foo2.com", DnsRecordType::AAAA, DnsRecordClass::IN);
@@ -248,7 +284,7 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  ASSERT_TRUE(response_parser_.parseResponseData(response_ptr));
+  response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
   ASSERT_EQ(1, response_parser_.getAnswers().size());
@@ -262,108 +298,113 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
   verifyAddress(expected, answer);
 }
 
-#if 0
-TEST_F(DnsFilterTest, VerifyResolverCall) {
+TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
 
   InSequence s;
 
-  resolver_ = std::make_shared<Network::MockDnsResolver>();
-  EXPECT_CALL(dispatcher_, createDnsResolver(_, _)).WillOnce(Return(resolver_));
-  ON_CALL(listener_factory_, dispatcher()).WillByDefault(ReturnRef(dispatcher_));
-
   const std::string expected_address("130.207.244.251");
   const std::string query_host("www.foobaz.com");
-  const std::string config = R"EOF(
-stat_prefix: "my_prefix"
-client_config:
-  forward_query: true
-  upstream_resolvers:
-    - "1.1.1.1"
-    - "8.8.8.8"
-    - "8.8.4.4"
-server_config:
-  control_plane_config:
-    external_retry_count: 3
-    virtual_domains:
-      - name: "www.foo1.com"
-        endpoint:
-          address_list:
-            address:
-              - 10.0.0.1
-  )EOF";
-
-  setup(config);
-
-  const std::string query =
-      buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
-  ASSERT_FALSE(query.empty());
+  setup(forward_query_on_config);
 
   // Verify that we are calling the resolver with the expected name
   Network::DnsResolver::ResolveCb resolve_cb;
   EXPECT_CALL(*resolver_, resolve(query_host, _, _))
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
-  // Send a query to a name not in our configuration
+  const std::string query = buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  // Send a query to for a name not in our configuration
   sendQueryFromClient("10.0.0.1:1000", query);
-  
+
   // Execute resolve callback
   resolve_cb(Network::DnsResolver::ResolutionStatus::Success,
              TestUtility::makeDnsResponse({expected_address}));
 
-}
+  // parse the result
+  response_parser_.parseDnsObject(response_ptr);
 
-TEST_F(DnsFilterTest, ForwardQueryTest) {
-
-  InSequence s;
-
-  const std::string query_host("www.foobaz.com");
-  const std::string expected_address("130.207.244.251");
-  const std::string config = R"EOF(
-stat_prefix: "my_prefix"
-client_config:
-  forward_query: true
-  upstream_resolvers:
-    - "1.1.1.1"
-    - "8.8.8.8"
-    - "8.8.4.4"
-server_config:
-  control_plane_config:
-    external_retry_count: 3
-    virtual_domains:
-      - name: "www.foo1.com"
-        endpoint:
-          address_list:
-            address:
-              - 10.0.0.1
-  )EOF";
-
-  setup(config);
-
-  const std::string query =
-      buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
-  ASSERT_FALSE(query.empty());
-
-
-  // Save the callback so that we can control the returned addresses
-  Network::DnsResolver::ResolveCb resolve_cb;
-  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
-      .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
-
-  // Send a query to a name not in our configuration
-  sendQueryFromClient("10.0.0.1:1000", query);
-  
-  // Callbacks?
-  resolve_cb(Network::DnsResolver::ResolutionStatus::Success,
-             TestUtility::makeDnsResponse({expected_address}));
-
-  // Verify the address returned
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getQueryResponseCode());
   const auto answer_iter = response_parser_.getAnswers().begin();
   const DnsAnswerRecordPtr& answer = *answer_iter;
 
   std::list<std::string> expected{expected_address};
   verifyAddress(expected, answer);
+
+  EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
-#endif
+
+TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
+
+  InSequence s;
+
+  const std::list<std::string> expected_address{"130.207.244.251", "130.207.244.252",
+                                                "130.207.244.253", "130.207.244.254"};
+  const std::string query_host("www.foobaz.com");
+  setup(forward_query_on_config);
+
+  // Verify that we are calling the resolver with the expected name
+  Network::DnsResolver::ResolveCb resolve_cb;
+  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+      .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
+
+  const std::string query = buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  // Send a query to for a name not in our configuration
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  // Execute resolve callback
+  resolve_cb(Network::DnsResolver::ResolutionStatus::Success,
+             TestUtility::makeDnsResponse({expected_address}));
+
+  // parse the result
+  response_parser_.parseDnsObject(response_ptr);
+
+  ASSERT_LT(response_ptr->length(), MAX_UDP_DNS_SIZE);
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(expected_address.size(), response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getQueryResponseCode());
+  for (const auto& answer : response_parser_.getAnswers()) {
+    verifyAddress(expected_address, answer);
+  }
+
+  EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
+}
+
+TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
+
+  InSequence s;
+
+  const std::string expected_address("130.207.244.251");
+  const std::string query_host("www.foobaz.com");
+  setup(forward_query_on_config);
+
+  // Verify that we are calling the resolver with the expected name
+  Network::DnsResolver::ResolveCb resolve_cb;
+  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+      .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
+
+  const std::string query = buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  // Send a query to for a name not in our configuration
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  // Execute resolve callback
+  resolve_cb(Network::DnsResolver::ResolutionStatus::Success, TestUtility::makeDnsResponse({}));
+
+  // parse the result
+  response_parser_.parseDnsObject(response_ptr);
+
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(0, response_parser_.getAnswers().size());
+  ASSERT_EQ(3, response_parser_.getQueryResponseCode());
+
+  EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
+}
 
 } // namespace
 } // namespace DnsFilter

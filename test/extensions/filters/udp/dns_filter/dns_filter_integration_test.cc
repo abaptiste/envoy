@@ -90,7 +90,6 @@ public:
     client.recv(response_datagram);
   }
 
-  // TODO: put this into a shared file
   std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
 
     Extensions::UdpFilters::DnsFilter::DnsMessageStruct query{};
