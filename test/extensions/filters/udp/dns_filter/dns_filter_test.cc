@@ -3,15 +3,14 @@
 
 #include "common/common/logger.h"
 
-#include "extensions/filters/udp/dns_filter/dns_filter.h"
-
 #include "test/mocks/event/mocks.h"
 #include "test/mocks/server/mocks.h"
 #include "test/test_common/environment.h"
 
-#include "dns_filter_test_utils.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+
+#include "dns_filter_test_utils.h"
 
 using testing::AtLeast;
 using testing::ByMove;
@@ -94,7 +93,7 @@ public:
   Event::MockDispatcher dispatcher_;
   std::shared_ptr<Network::MockDnsResolver> resolver_;
 
-  // This config has external resolution disabled and is used to verify local lookups. With
+  // This config has external resolution disabled and is used to verify local lookups.  With
   // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
   // each test.
   const std::string forward_query_off_config = R"EOF(
@@ -130,7 +129,7 @@ server_config:
             - 10.0.3.1
   )EOF";
 
-  // This config has external resolution enabled. Each test must setup the mock to save and execute
+  // This config has external resolution enabled.  Each test must setup the mock to save and execute
   // the resolver callback
   const std::string forward_query_on_config = R"EOF(
 stat_prefix: "my_prefix"

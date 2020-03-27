@@ -1,7 +1,5 @@
 #include "dns_filter_test_utils.h"
 
-#include "extensions/filters/udp/dns_filter/dns_filter.h"
-
 #include "test/test_common/utility.h"
 
 namespace Envoy {
