@@ -19,6 +19,7 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
     break;
   default:
     ENVOY_LOG(error, "Unknown query type [{}] for upstream lookup", domain_query->type_);
+    invokeCallback();
     return;
   }
 
@@ -32,6 +33,7 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
   query_rec_ = domain_query;
 
+  // Re-arm the timeout timer
   resolver_timer_->disableTimer();
   resolver_timer_->enableTimer(timeout_);
 
@@ -50,8 +52,7 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
         ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
 
-        // TODO: Cache returned addresses until TTL expires. C-ares doesn't expose the TTL in the
-        // data available here.
+        // C-ares doesn't expose the TTL in the data available here.
         if (status == Network::DnsResolver::ResolutionStatus::Success) {
           for (const auto resp : response) {
             ASSERT(resp.address_ != nullptr);

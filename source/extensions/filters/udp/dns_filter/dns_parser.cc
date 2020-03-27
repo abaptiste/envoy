@@ -152,6 +152,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   memset(&incoming_, 0x00, sizeof(incoming_));
   queries_.clear();
+  answers_.clear();
 
   static const uint64_t field_size = sizeof(uint16_t);
   uint64_t offset = 0;
@@ -390,7 +391,8 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
 
   *offset = data_offset;
 
-  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl, ip_addr);
+  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl,
+                                           std::move(ip_addr));
 }
 
 void DnsObject::buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const uint16_t ttl,
@@ -425,7 +427,7 @@ void DnsObject::buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const u
   // The answer record could contain types other than IP's. We will support only IP addresses for
   // the moment
   auto answer_record = std::make_unique<DnsAnswerRecord>(query_rec->name_, query_rec->type_,
-                                                         query_rec->class_, ttl, ipaddr);
+                                                         query_rec->class_, ttl, std::move(ipaddr));
   answers_.push_back(std::move(answer_record));
 }
 
@@ -468,7 +470,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
 
   *offset = name_offset;
 
-  return rec;
+  return std::move(rec);
 }
 
 void DnsMessageParser::setDnsResponseFlags() {

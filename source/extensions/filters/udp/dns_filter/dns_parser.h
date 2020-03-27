@@ -139,8 +139,6 @@ public:
   virtual void buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const uint16_t ttl,
                                     Network::Address::InstanceConstSharedPtr ipaddr);
 
-  virtual void clearAnswerRecords() { answers_.clear(); }
-
   virtual const DnsQueryList& getQueries() { return queries_; }
 
   virtual const DnsAnswerList& getAnswers() { return answers_; }

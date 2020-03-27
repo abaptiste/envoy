@@ -41,11 +41,12 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
           addrs.push_back(ipaddr);
         }
       }
-      virtual_domains_.emplace(std::make_pair(virtual_domain.name(), addrs));
+      virtual_domains_.emplace(virtual_domain.name(), std::move(addrs));
     }
 
     // Add known domains
     for (const auto& suffix : dns_table.known_suffixes()) {
+      // TODO: We support only suffixes here. Expand this to support other StringMatcher types
       envoy::type::matcher::v3::StringMatcher matcher;
       matcher.set_suffix(suffix.suffix());
       auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(matcher);
@@ -60,7 +61,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     resolvers_.reserve(upstream_resolvers.size());
     for (const auto& resolver : upstream_resolvers) {
       const auto ipaddr = Network::Utility::parseInternetAddress(resolver, 0, true);
-      resolvers_.push_back(ipaddr);
+      resolvers_.push_back(std::move(ipaddr));
     }
   }
 
@@ -82,7 +83,7 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
   // we build an answer record from each IP resolved, then send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
     for (const auto& ip : iplist) {
-      message_parser_->buildDnsAnswerRecord(query, 300, ip);
+      message_parser_->buildDnsAnswerRecord(query, 300, std::move(ip));
     }
     sendDnsResponse();
   };
@@ -120,7 +121,6 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   // Parse the query
   message_parser_->parseDnsObject(client_request.buffer_);
-  message_parser_->clearAnswerRecords();
 
   // Resolve the requested name
   auto response = getResponseForQuery();
@@ -157,7 +157,7 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
   // TODO: Do we assert that there is only one query here?
   for (const auto& query : queries) {
 
-    // Try to resolve the query locally. If forwarding the query externally is  disabled we will
+    // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forward_queries()) {
 
@@ -177,10 +177,11 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
       }
 
       // Build the answer records from each IP address we have
-      for (const auto& ipaddr : configured_address_list) {
-        ENVOY_LOG(debug, "returning address {} for domain [{}]", ipaddr->ip()->addressAsString(),
-                  query->name_);
-        message_parser_->buildDnsAnswerRecord(query, 300, ipaddr);
+      for (const auto& configured_address : configured_address_list) {
+        ASSERT(configured_address != nullptr);
+        ENVOY_LOG(debug, "using address {} for domain [{}]",
+                  configured_address->ip()->addressAsString(), query->name_);
+        message_parser_->buildDnsAnswerRecord(query, 300, configured_address);
       }
 
       return DnsLookupResponse::Success;
@@ -203,6 +204,7 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
 }
 
 void DnsFilter::sendDnsResponse() {
+
   // Clear any cruft in the outgoing buffer
   response_.drain(response_.length());
 

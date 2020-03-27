@@ -7,10 +7,9 @@
 #include "test/mocks/server/mocks.h"
 #include "test/test_common/environment.h"
 
+#include "dns_filter_test_utils.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-
-#include "dns_filter_test_utils.h"
 
 using testing::AtLeast;
 using testing::ByMove;
@@ -93,7 +92,7 @@ public:
   Event::MockDispatcher dispatcher_;
   std::shared_ptr<Network::MockDnsResolver> resolver_;
 
-  // This config has external resolution disabled and is used to verify local lookups.  With
+  // This config has external resolution disabled and is used to verify local lookups. With
   // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
   // each test.
   const std::string forward_query_off_config = R"EOF(
@@ -129,7 +128,7 @@ server_config:
             - 10.0.3.1
   )EOF";
 
-  // This config has external resolution enabled.  Each test must setup the mock to save and execute
+  // This config has external resolution enabled. Each test must setup the mock to save and execute
   // the resolver callback
   const std::string forward_query_on_config = R"EOF(
 stat_prefix: "my_prefix"
@@ -189,6 +188,33 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   std::list<std::string> expected{"10.0.3.1"};
   Utils::verifyAddress(expected, answer);
+}
+
+TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  const std::string query =
+      Utils::buildQueryForDomain("www.foo3.com", DnsRecordType::A, DnsRecordClass::IN);
+  ASSERT_FALSE(query.empty());
+
+  for (size_t i = 0; i < 5; i++) {
+    sendQueryFromClient("10.0.0.1:1000", query);
+
+    ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
+
+    ASSERT_EQ(1, response_parser_.getQueries().size());
+    ASSERT_EQ(1, response_parser_.getAnswers().size());
+    ASSERT_EQ(0, response_parser_.getQueryResponseCode());
+
+    // Verify the address returned
+    const auto answer_iter = response_parser_.getAnswers().begin();
+    const DnsAnswerRecordPtr& answer = *answer_iter;
+
+    std::list<std::string> expected{"10.0.3.1"};
+    Utils::verifyAddress(expected, answer);
+  }
 }
 
 TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
