@@ -72,7 +72,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
-    : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener())
+    : UdpListenerReadFilter(callbacks), config_(config),
+      cluster_manager_(config_->cluster_manager()), listener_(callbacks.udpListener())
 
 {
   message_parser_ = std::make_unique<DnsMessageParser>();
@@ -161,7 +162,19 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forward_queries()) {
 
-      // TODO: Determine whether the name is a cluster
+      // Ref source/extensions/filters/network/redis_proxy/conn_pool_impl.cc
+
+      // Determine whether the name is a cluster
+      Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query->name_);
+      if (cluster != nullptr) {
+
+        for (const auto& i : cluster->prioritySet().hostSetsPerPriority()) {
+          for (auto& host : i->hosts()) {
+            message_parser_->buildDnsAnswerRecord(query, 300, host->address());
+          }
+        }
+        continue;
+      }
 
       // TODO: If we have a large ( > 100) domain list, use a binary search.
       const auto iter = domains.find(query->name_);

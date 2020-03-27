@@ -53,6 +53,7 @@ public:
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
   std::list<Matchers::StringMatcherPtr>& known_suffixes() const { return known_suffixes_; }
+  Upstream::ClusterManager& cluster_manager() const { return cluster_manager_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forward_queries() const { return forward_queries_; }
   std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
@@ -96,9 +97,8 @@ private:
   const DnsFilterEnvoyConfigSharedPtr config_;
 
   DnsMessageParserPtr message_parser_;
-
+  Upstream::ClusterManager& cluster_manager_;
   Network::UdpListener& listener_;
-  Runtime::RandomGeneratorImpl rng_;
   DnsFilterResolverPtr resolver_;
 
   Network::Address::InstanceConstSharedPtr local_;

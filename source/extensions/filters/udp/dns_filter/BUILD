@@ -13,13 +13,11 @@ envoy_cc_library(
     name = "dns_filter_lib",
     srcs = [
         "dns_filter.cc",
-        "dns_filter_cluster_manager.cc",
         "dns_filter_resolver.cc",
         "dns_parser.cc",
     ],
     hdrs = [
         "dns_filter.h",
-        "dns_filter_cluster_manager.h",
         "dns_filter_resolver.h",
         "dns_parser.h",
     ],
