@@ -246,10 +246,24 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
       ENVOY_LOG_MISC(error, "Couldn't parse answer record from buffer");
       return false;
     }
-    answers_.push_back(std::move(rec));
+    addAnswerRecord(std::move(rec));
   }
 
   return true;
+}
+
+void DnsObject::addAnswerRecord(DnsAnswerRecordPtr rec) {
+
+  const std::string domain_name = rec->name_;
+
+  const auto& answer_iter = answers_.find(domain_name);
+  if (answer_iter == answers_.end()) {
+    std::list<DnsAnswerRecordPtr> answer_list{};
+    answer_list.push_back(std::move(rec));
+    answers_.emplace(domain_name, std::move(answer_list));
+  } else {
+    answer_iter->second.push_back(std::move(rec));
+  }
 }
 
 const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffer,
@@ -428,7 +442,7 @@ void DnsObject::buildDnsAnswerRecord(const DnsQueryRecordPtr& query_rec, const u
   // the moment
   auto answer_record = std::make_unique<DnsAnswerRecord>(query_rec->name_, query_rec->type_,
                                                          query_rec->class_, ttl, std::move(ipaddr));
-  answers_.push_back(std::move(answer_record));
+  addAnswerRecord(std::move(answer_record));
 }
 
 DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -473,7 +487,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
   return std::move(rec);
 }
 
-void DnsMessageParser::setDnsResponseFlags() {
+void DnsMessageParser::setDnsResponseFlags(uint16_t answers) {
 
   // Copy the transaction ID
   generated_.id = incoming_.id;
@@ -500,7 +514,7 @@ void DnsMessageParser::setDnsResponseFlags() {
 
   generated_.f.flags.cd = 0;
 
-  generated_.answers = answers_.size();
+  generated_.answers = answers;
 
   // If the ID is empty, the query was not parsed correctly or
   // it may be an invalid buffer
@@ -528,9 +542,57 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   // a) Return more than one address
   // b) Be absolutely certain we remain under the 512 byte response limit
   // Reference: https://tools.ietf.org/html/rfc6891#page-5
+  //
+
+  static constexpr uint64_t max_dns_response_size{512};
+
+  // Each response must have the flags, which take 4 bytes. Account for them
+  // immediately so that we can adjust the number of returned answers if necessary
+  //
+  uint64_t total_buffer_size = 4;
+  uint16_t serialized_answers = 0;
+
+  // Copy the query that we are answering into to the response
+  // TODO: Find a way to copy this from the original buffer so that we aren't re-serializing the
+  // data.
+
+  Buffer::OwnedImpl query_buffer{};
+  Buffer::OwnedImpl answer_buffer{};
+
+  // There should be only one query here.
+  for (const auto& query : queries_) {
+
+    // Serialize the query
+    query_buffer.add(query->serialize());
+
+    total_buffer_size += query_buffer.length();
+    ENVOY_LOG_MISC(debug, "alvinsb: total_buffer_size after queries: {}", total_buffer_size);
+
+    // Build the answer buffer for the query
+    // Serialize the answer records and add to the buffer here.
+    const auto& answer_rec = answers_.find(query->name_);
+    if (answer_rec == answers_.end()) {
+      continue;
+    }
+
+    for (const auto& answer : answer_rec->second) {
+      const auto& serialized_answer = answer->serialize();
+      const uint64_t serialized_answer_length = serialized_answer.length();
+      if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
+        break;
+      }
+
+      ++serialized_answers;
+      total_buffer_size += serialized_answer_length;
+      answer_buffer.add(serialized_answer);
+    }
+  }
+
+  ENVOY_LOG_MISC(debug, "alvinsb: total_buffer_size after answers[{}/{}]: {}", serialized_answers,
+                 answers_.size(), total_buffer_size);
 
   // Build the response and send it on the connection
-  setDnsResponseFlags();
+  setDnsResponseFlags(serialized_answers);
 
   buffer.writeBEInt<uint16_t>(generated_.id);
   buffer.writeBEInt<uint16_t>(generated_.f.val);
@@ -539,19 +601,20 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   buffer.writeBEInt<uint16_t>(generated_.authority_rrs);
   buffer.writeBEInt<uint16_t>(generated_.additional_rrs);
 
-  // Copy the query that we are answering into to the response
-  // TODO: Find a way to copy this from the original buffer so that we aren't re-serializing the
-  // data.
-  if (!queries_.empty()) {
-    buffer.add(queries_.front()->serialize());
-  }
-
-  // Serialize the answer records and add to the buffer here.
-  for (const auto& answer : answers_) {
-    buffer.add(answer->serialize());
-  }
+  buffer.move(query_buffer);
+  buffer.move(answer_buffer);
 
   return true;
+}
+
+uint64_t DnsMessageParser::queriesUnanswered() {
+
+  const uint64_t queries = queries_.size();
+  const uint64_t answers = answers_.size();
+
+  ASSERT(queries >= answers);
+
+  return queries - answers;
 }
 
 } // namespace DnsFilter

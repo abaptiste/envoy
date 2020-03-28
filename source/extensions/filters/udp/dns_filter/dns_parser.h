@@ -104,7 +104,7 @@ public:
 };
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
-using DnsAnswerList = std::list<DnsAnswerRecordPtr>;
+using DnsAnswerList = absl::flat_hash_map<std::string, std::list<DnsAnswerRecordPtr>>;
 
 enum class DnsQueryParseState {
   INIT = 0,
@@ -160,6 +160,7 @@ private:
   const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
                                        uint64_t* name_offset);
 
+  void addAnswerRecord(DnsAnswerRecordPtr rec);
   DnsMessageStruct incoming_;
   DnsMessageStruct generated_;
 
@@ -171,9 +172,10 @@ class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> 
 public:
   DnsAnswerRecordPtr getResponseForQuery();
   bool buildResponseBuffer(Buffer::OwnedImpl& buffer);
+  uint64_t queriesUnanswered();
 
 private:
-  void setDnsResponseFlags();
+  void setDnsResponseFlags(uint16_t answers);
 };
 
 using DnsMessageParserPtr = std::unique_ptr<DnsMessageParser>;

@@ -143,17 +143,62 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   sendDnsResponse();
 }
 
+bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
+
+  Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query->name_);
+  if (cluster == nullptr) {
+    return false;
+  }
+
+  // TODO: Determine whether we can select a host from the cluster so that the weighting is obeyed
+  uint64_t hosts_found = 0;
+  for (const auto& i : cluster->prioritySet().hostSetsPerPriority()) {
+    for (auto& host : i->hosts()) {
+      ++hosts_found;
+      message_parser_->buildDnsAnswerRecord(query, 300, std::move(host->address()));
+    }
+  }
+
+  return (hosts_found > 0);
+}
+
+bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {
+
+  const auto& domains = config_->domains();
+
+  // TODO: If we have a large ( > 100) domain list, use a binary search.
+  const auto iter = domains.find(query->name_);
+  if (iter == domains.end()) {
+    ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query->name_);
+    return false;
+  }
+
+  const auto& configured_address_list = iter->second;
+  if (configured_address_list.empty()) {
+    ENVOY_LOG(debug, "Domain [{}] list is empty", query->name_);
+    return false;
+  }
+
+  // Build the answer records from each IP address we have
+  uint64_t hosts_found = 0;
+  for (const auto& configured_address : configured_address_list) {
+    ASSERT(configured_address != nullptr);
+    ENVOY_LOG(debug, "using address {} for domain [{}]",
+              configured_address->ip()->addressAsString(), query->name_);
+    ++hosts_found;
+    message_parser_->buildDnsAnswerRecord(query, 300, configured_address);
+  }
+  return (hosts_found > 0);
+}
+
 DnsLookupResponse DnsFilter::getResponseForQuery() {
 
-  Network::Address::InstanceConstSharedPtr ipaddr = nullptr;
   const auto& queries = message_parser_->getQueries();
 
   // It appears to be a rare case where we would have more than one query in a single request. It is
   // allowed by the protocol but not widely supported:
   //
   // https://stackoverflow.com/a/4083071
-
-  const auto& domains = config_->domains();
 
   // TODO: Do we assert that there is only one query here?
   for (const auto& query : queries) {
@@ -164,56 +209,31 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
 
       // Ref source/extensions/filters/network/redis_proxy/conn_pool_impl.cc
 
-      // Determine whether the name is a cluster
-      Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query->name_);
-      if (cluster != nullptr) {
-
-        for (const auto& i : cluster->prioritySet().hostSetsPerPriority()) {
-          for (auto& host : i->hosts()) {
-            message_parser_->buildDnsAnswerRecord(query, 300, host->address());
-          }
-        }
+      // Determine whether the name is a cluster. Move on to the next query if successful
+      if (resolveViaClusters(query)) {
         continue;
       }
 
-      // TODO: If we have a large ( > 100) domain list, use a binary search.
-      const auto iter = domains.find(query->name_);
-      if (iter == domains.end()) {
-        ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query->name_);
+      if (resolveViaConfiguredHosts(query)) {
         continue;
       }
-
-      const auto& configured_address_list = iter->second;
-      if (configured_address_list.empty()) {
-        ENVOY_LOG(debug, "Domain [{}] list is empty", query->name_);
-        continue;
-      }
-
-      // Build the answer records from each IP address we have
-      for (const auto& configured_address : configured_address_list) {
-        ASSERT(configured_address != nullptr);
-        ENVOY_LOG(debug, "using address {} for domain [{}]",
-                  configured_address->ip()->addressAsString(), query->name_);
-        message_parser_->buildDnsAnswerRecord(query, 300, configured_address);
-      }
-
-      return DnsLookupResponse::Success;
     }
+
     // We don't have a statically configured record for the domain or it's unknown resolve it
     // externally
-    if (ipaddr == nullptr) {
-      ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
+    ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
 
-      // When the callback executes it will execute a callback to build a response and send it to
-      // the client
-      resolver_->resolve_query(query);
+    // When the callback executes it will execute a callback to build a response and send it to
+    // the client
+    resolver_->resolve_query(query);
 
-      return DnsLookupResponse::External;
-    }
+    return DnsLookupResponse::External;
   }
 
-  // No address found. Response to the client appropriately
-  return DnsLookupResponse::Failure;
+  if (message_parser_->queriesUnanswered()) {
+    return DnsLookupResponse::Failure;
+  }
+  return DnsLookupResponse::Success;
 }
 
 void DnsFilter::sendDnsResponse() {

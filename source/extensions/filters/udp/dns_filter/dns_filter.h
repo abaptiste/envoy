@@ -93,6 +93,8 @@ public:
 private:
   virtual void sendDnsResponse();
   virtual DnsLookupResponse getResponseForQuery();
+  bool resolveViaClusters(const DnsQueryRecordPtr& query);
+  bool resolveViaConfiguredHosts(const DnsQueryRecordPtr& query);
 
   const DnsFilterEnvoyConfigSharedPtr config_;
 

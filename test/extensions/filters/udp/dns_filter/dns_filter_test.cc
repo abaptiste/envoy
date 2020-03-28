@@ -155,7 +155,6 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   setup(forward_query_off_config);
 
-  // TODO: Validate that the response is addressed to this client
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
@@ -170,8 +169,9 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   setup(forward_query_off_config);
 
+  const std::string domain("www.foo3.com");
   const std::string query =
-      Utils::buildQueryForDomain("www.foo3.com", DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
@@ -182,11 +182,15 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   ASSERT_EQ(1, response_parser_.getAnswers().size());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
-  // Verify the address returned
-  const auto answer_iter = response_parser_.getAnswers().begin();
-  const DnsAnswerRecordPtr& answer = *answer_iter;
+  // Verify that we have an answer record for the queried domain
+  const auto& answers = response_parser_.getAnswers();
+  const auto answer_iter = answers.find(domain);
+  ASSERT_NE(answer_iter, answers.end());
+  ASSERT_EQ(1, answer_iter->second.size());
+  const DnsAnswerRecordPtr& answer = *(answer_iter->second.begin());
 
-  std::list<std::string> expected{"10.0.3.1"};
+  // Verify the address returned
+  const std::list<std::string> expected{"10.0.3.1"};
   Utils::verifyAddress(expected, answer);
 }
 
@@ -195,8 +199,9 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
 
   setup(forward_query_off_config);
 
+  const std::string domain("www.foo3.com");
   const std::string query =
-      Utils::buildQueryForDomain("www.foo3.com", DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   for (size_t i = 0; i < 5; i++) {
@@ -208,10 +213,14 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     ASSERT_EQ(1, response_parser_.getAnswers().size());
     ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
-    // Verify the address returned
-    const auto answer_iter = response_parser_.getAnswers().begin();
-    const DnsAnswerRecordPtr& answer = *answer_iter;
+    // Verify that we have an answer record for the queried domain
+    const auto& answers = response_parser_.getAnswers();
+    const auto answer_iter = answers.find(domain);
+    ASSERT_NE(answer_iter, answers.end());
+    ASSERT_EQ(1, answer_iter->second.size());
+    const DnsAnswerRecordPtr& answer = *(answer_iter->second.begin());
 
+    // Verify the address returned
     std::list<std::string> expected{"10.0.3.1"};
     Utils::verifyAddress(expected, answer);
   }
@@ -240,8 +249,9 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
 
   setup(forward_query_off_config);
 
+  const std::string domain("www.foo2.com");
   const std::string query =
-      Utils::buildQueryForDomain("www.foo2.com", DnsRecordType::AAAA, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DnsRecordType::AAAA, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
@@ -252,10 +262,14 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
   ASSERT_EQ(1, response_parser_.getAnswers().size());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
-  // Verify the address returned
-  const auto answer_iter = response_parser_.getAnswers().begin();
-  const DnsAnswerRecordPtr& answer = *answer_iter;
+  // Verify that we have an answer record for the queried domain
+  const auto& answers = response_parser_.getAnswers();
+  const auto answer_iter = answers.find(domain);
+  ASSERT_NE(answer_iter, answers.end());
+  ASSERT_EQ(1, answer_iter->second.size());
+  const DnsAnswerRecordPtr& answer = *(answer_iter->second.begin());
 
+  // Verify the address returned
   std::list<std::string> expected{"2001:8a:c1::2800:7"};
   Utils::verifyAddress(expected, answer);
 }
@@ -265,16 +279,16 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   InSequence s;
 
   const std::string expected_address("130.207.244.251");
-  const std::string query_host("www.foobaz.com");
+  const std::string domain("www.foobaz.com");
   setup(forward_query_on_config);
 
   // Verify that we are calling the resolver with the expected name
   Network::DnsResolver::ResolveCb resolve_cb;
-  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+  EXPECT_CALL(*resolver_, resolve(domain, _, _))
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -290,8 +304,12 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   ASSERT_EQ(1, response_parser_.getQueries().size());
   ASSERT_EQ(1, response_parser_.getAnswers().size());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
-  const auto answer_iter = response_parser_.getAnswers().begin();
-  const DnsAnswerRecordPtr& answer = *answer_iter;
+
+  const auto& answers = response_parser_.getAnswers();
+  const auto answer_iter = answers.find(domain);
+  ASSERT_NE(answer_iter, answers.end());
+  ASSERT_EQ(1, answer_iter->second.size());
+  const DnsAnswerRecordPtr& answer = *(answer_iter->second.begin());
 
   std::list<std::string> expected{expected_address};
   Utils::verifyAddress(expected, answer);
@@ -305,16 +323,16 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
 
   const std::list<std::string> expected_address{"130.207.244.251", "130.207.244.252",
                                                 "130.207.244.253", "130.207.244.254"};
-  const std::string query_host("www.foobaz.com");
+  const std::string domain("www.foobaz.com");
   setup(forward_query_on_config);
 
   // Verify that we are calling the resolver with the expected name
   Network::DnsResolver::ResolveCb resolve_cb;
-  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+  EXPECT_CALL(*resolver_, resolve(domain, _, _))
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -329,9 +347,14 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
 
   ASSERT_LT(response_ptr->length(), Utils::MAX_UDP_DNS_SIZE);
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(expected_address.size(), response_parser_.getAnswers().size());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
-  for (const auto& answer : response_parser_.getAnswers()) {
+
+  const auto& answers = response_parser_.getAnswers();
+  const auto answer_iter = answers.find(domain);
+  ASSERT_NE(answer_iter, answers.end());
+  ASSERT_EQ(expected_address.size(), answer_iter->second.size());
+
+  for (const auto& answer : answer_iter->second) {
     Utils::verifyAddress(expected_address, answer);
   }
 
