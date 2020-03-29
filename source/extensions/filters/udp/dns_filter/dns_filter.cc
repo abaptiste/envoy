@@ -150,16 +150,12 @@ bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
     return false;
   }
 
-  // TODO: Determine whether we can select a host from the cluster so that the weighting is obeyed
-  uint64_t hosts_found = 0;
-  for (const auto& i : cluster->prioritySet().hostSetsPerPriority()) {
-    for (auto& host : i->hosts()) {
-      ++hosts_found;
-      message_parser_->buildDnsAnswerRecord(query, 300, std::move(host->address()));
-    }
+  Upstream::HostConstSharedPtr host = cluster->loadBalancer().chooseHost(nullptr);
+  if (host != nullptr) {
+    message_parser_->buildDnsAnswerRecord(query, 300, std::move(host->address()));
   }
 
-  return (hosts_found > 0);
+  return (host != nullptr);
 }
 
 bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {
@@ -207,8 +203,6 @@ DnsLookupResponse DnsFilter::getResponseForQuery() {
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forward_queries()) {
 
-      // Ref source/extensions/filters/network/redis_proxy/conn_pool_impl.cc
-
       // Determine whether the name is a cluster. Move on to the next query if successful
       if (resolveViaClusters(query)) {
         continue;
@@ -241,9 +235,9 @@ void DnsFilter::sendDnsResponse() {
   // Clear any cruft in the outgoing buffer
   response_.drain(response_.length());
 
-  if (!message_parser_->buildResponseBuffer(response_)) {
-    ENVOY_LOG(error, "Unable to build a response for the client");
-  }
+  // This serializes the generated response to the parse query from the client. If there is a
+  // parsing error or the incoming query is invalid, we will still generate a valid DNS response
+  message_parser_->buildResponseBuffer(response_);
 
   Network::UdpSendData response_data{local_->ip(), *peer_, response_};
   listener_.send(response_data);

@@ -87,9 +87,8 @@ inline void BaseDnsRecord::serializeName() {
       ++iter;
     }
 
-    // Move our last marker to the next character
-    // after where we stopped. Search for the next
-    // name separator
+    // Move our last marker to the first character after where we
+    // stopped. Search for the next name separator
     last += count;
     ++last;
     count = name_.find_first_of('.', last);
@@ -154,7 +153,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
   queries_.clear();
   answers_.clear();
 
-  static const uint64_t field_size = sizeof(uint16_t);
+  static constexpr uint64_t field_size = sizeof(uint16_t);
   uint64_t offset = 0;
   uint16_t data;
 
@@ -297,10 +296,10 @@ const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffe
     const uint64_t segment_length = static_cast<uint64_t>(c);
 
     // Verify that we have enough data to read the segment length
-    if (*available_bytes < segment_length) {
+    if (segment_length > *available_bytes) {
       ENVOY_LOG_MISC(error,
                      "Insufficient data in buffer for name segment. "
-                     "available bytes: {}  segment: {}",
+                     "available bytes: {}  segment length: {}",
                      *available_bytes, segment_length);
       return EMPTY_STRING;
     }
@@ -351,24 +350,28 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   record_type = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(record_type);
   available_bytes -= sizeof(record_type);
+  ASSERT(available_bytes);
 
   //  Parse the record class
   uint16_t record_class;
   record_class = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(record_class);
   available_bytes -= sizeof(record_class);
+  ASSERT(available_bytes);
 
   //  Parse the record TTL
   uint32_t ttl;
   ttl = buffer->peekBEInt<uint32_t>(data_offset);
   data_offset += sizeof(ttl);
   available_bytes -= sizeof(ttl);
+  ASSERT(available_bytes);
 
   //  Parse the Data Length and address data record
   uint16_t data_length;
   data_length = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(data_length);
   available_bytes -= sizeof(data_length);
+  ASSERT(available_bytes);
 
   if (available_bytes < data_length) {
     ENVOY_LOG_MISC(error,
@@ -478,7 +481,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
   // pointer avoids duplicating this data in the asynchronous resolution path
   auto rec = std::make_shared<DnsQueryRecord>(record_name, record_type, record_class);
 
-  // stop reading here since we aren't parsing additional records
+  // stop reading he buffer here since we aren't parsing additional records
   ENVOY_LOG_MISC(trace, "Extracted query record. Name: {} type: {} class: {}", rec->name_,
                  rec->type_, rec->class_);
 
@@ -536,25 +539,16 @@ void DnsMessageParser::setDnsResponseFlags(uint16_t answers) {
   dumpFlags(generated_);
 }
 
-bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
+void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
 
-  // TODO: We need to track the size of the response so that we can:
-  // a) Return more than one address
-  // b) Be absolutely certain we remain under the 512 byte response limit
-  // Reference: https://tools.ietf.org/html/rfc6891#page-5
-  //
-
+  // Ensure that responses stay below the 512 byte byte limit. If we are to exceed this we must add
+  // DNS extension fields
   static constexpr uint64_t max_dns_response_size{512};
 
-  // Each response must have the flags, which take 4 bytes. Account for them
-  // immediately so that we can adjust the number of returned answers if necessary
-  //
+  // Each response must have DNS flags, which take 4 bytes. Account for them
+  // immediately so that we can adjust the number of returned answers
   uint64_t total_buffer_size = 4;
   uint16_t serialized_answers = 0;
-
-  // Copy the query that we are answering into to the response
-  // TODO: Find a way to copy this from the original buffer so that we aren't re-serializing the
-  // data.
 
   Buffer::OwnedImpl query_buffer{};
   Buffer::OwnedImpl answer_buffer{};
@@ -564,20 +558,19 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
 
     // Serialize the query
     query_buffer.add(query->serialize());
-
     total_buffer_size += query_buffer.length();
-    ENVOY_LOG_MISC(debug, "alvinsb: total_buffer_size after queries: {}", total_buffer_size);
 
-    // Build the answer buffer for the query
-    // Serialize the answer records and add to the buffer here.
+    // Find the answer record corresponding to this query
     const auto& answer_rec = answers_.find(query->name_);
     if (answer_rec == answers_.end()) {
       continue;
     }
 
+    // Serialize each answer record and stop if we will exceed 512 bytes
     for (const auto& answer : answer_rec->second) {
       const auto& serialized_answer = answer->serialize();
       const uint64_t serialized_answer_length = serialized_answer.length();
+
       if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
         break;
       }
@@ -587,9 +580,6 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
       answer_buffer.add(serialized_answer);
     }
   }
-
-  ENVOY_LOG_MISC(debug, "alvinsb: total_buffer_size after answers[{}/{}]: {}", serialized_answers,
-                 answers_.size(), total_buffer_size);
 
   // Build the response and send it on the connection
   setDnsResponseFlags(serialized_answers);
@@ -601,17 +591,18 @@ bool DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   buffer.writeBEInt<uint16_t>(generated_.authority_rrs);
   buffer.writeBEInt<uint16_t>(generated_.additional_rrs);
 
+  // write the queries and answers
   buffer.move(query_buffer);
   buffer.move(answer_buffer);
-
-  return true;
 }
 
 uint64_t DnsMessageParser::queriesUnanswered() {
 
-  const uint64_t queries = queries_.size();
-  const uint64_t answers = answers_.size();
+  const auto queries = queries_.size();
+  const auto answers = answers_.size();
 
+  // The answers_ object is a map that pairs each query (if there are more than one) to the list of
+  // answer records to be serialized and sent to the client
   ASSERT(queries >= answers);
 
   return queries - answers;

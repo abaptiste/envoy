@@ -171,7 +171,7 @@ private:
 class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
 public:
   DnsAnswerRecordPtr getResponseForQuery();
-  bool buildResponseBuffer(Buffer::OwnedImpl& buffer);
+  void buildResponseBuffer(Buffer::OwnedImpl& buffer);
   uint64_t queriesUnanswered();
 
 private:
