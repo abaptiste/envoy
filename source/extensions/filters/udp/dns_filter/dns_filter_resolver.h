@@ -18,6 +18,10 @@ namespace DnsFilter {
 
 enum class DnsFilterResolverStatus { Pending, Complete, TimedOut };
 
+/*
+ * This class encapsulates the logic of handling an asynchronous DNS request for the DNS filter.
+ * External request timeouts are handled here.
+ */
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilterResolver(AnswerCallback& callback, AddressConstPtrVec resolvers,
@@ -28,9 +32,23 @@ public:
         active_query_(nullptr) {}
 
   virtual ~DnsFilterResolver(){};
+
+  /**
+   * @brief entry point to resolve the name in a DnsQueryRecord
+   *
+   * This function uses the query object to determine whether it is requesting an A or AAAA record
+   * for the given name.  When the resolver callback executes, this will execute a DNS Filter
+   * callback in order to build the answer object returned to the client.
+   *
+   * @param domain_query the query record object containing the name for which we are resolving
+   */
   virtual void resolve_query(const DnsQueryRecordPtr& domain_query);
 
 private:
+  /**
+   * Invoke the DNS Filter callback only if our state indicates we have not timed out waiting for a
+   * response from the external resolver
+   */
   void invokeCallback() {
     // We've timed out. Guard against sending a response
     if (resolution_status_ == DnsFilterResolverStatus::TimedOut) {
@@ -40,6 +58,10 @@ private:
     callback_(query_rec_, resolved_hosts_);
   }
 
+  /**
+   * Invoke the DNS Filter callback after explicitly clearing the resolved hosts list.  The filter
+   * will respond approrpriately.
+   */
   void onResolveTimeout() {
     // If the resolution status is not Pending, then we've already completed the lookup and
     // responded to the client.
@@ -52,6 +74,7 @@ private:
   }
 
   const Network::DnsResolverSharedPtr resolver_;
+
   AnswerCallback& callback_;
   std::chrono::milliseconds timeout_;
   Event::TimerPtr resolver_timer_;

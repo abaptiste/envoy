@@ -44,6 +44,9 @@ struct DnsFilterStats {
 
 using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrVec>;
 
+/**
+ * DnsFilter configuration class abstracting access to data necessary for the filter's operation
+ */
 class DnsFilterEnvoyConfig {
 public:
   DnsFilterEnvoyConfig(
@@ -53,10 +56,14 @@ public:
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
   std::list<Matchers::StringMatcherPtr>& known_suffixes() const { return known_suffixes_; }
+  absl::flat_hash_map<std::string, uint64_t>& domain_ttl() const { return domain_ttl_; }
   Upstream::ClusterManager& cluster_manager() const { return cluster_manager_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forward_queries() const { return forward_queries_; }
   std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
+
+  static constexpr uint64_t DefaultResolverTimeoutMs = 500;
+  static constexpr uint64_t DefaultResolverTTLs = 300;
 
 private:
   static DnsFilterStats generateStats(const std::string& stat_prefix, Stats::Scope& scope) {
@@ -71,6 +78,7 @@ private:
   mutable DnsFilterStats stats_;
   mutable DnsVirtualDomainConfig virtual_domains_;
   mutable std::list<Matchers::StringMatcherPtr> known_suffixes_;
+  mutable absl::flat_hash_map<std::string, uint64_t> domain_ttl_;
   bool forward_queries_;
   mutable AddressConstPtrVec resolvers_;
   mutable std::chrono::milliseconds resolver_timeout_ms_;
@@ -78,22 +86,59 @@ private:
 
 using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
 
-enum class DnsLookupResponse { Success, Failure, External };
+enum class DnsLookupResponseCode { Success, Failure, External };
 
+/**
+ * This class is responsible for handling incoming DNS datagrams and responding to the queries.
+ * The filter will attempt to resolve the query via its configuration or direct to an external
+ * resolver when necessary
+ */
 class DnsFilter : public Network::UdpListenerReadFilter, Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
             const DnsFilterEnvoyConfigSharedPtr& config);
 
+  // Network::UdpListenerReadFilter
   void onData(Network::UdpRecvData& client_request) override;
-  void onReceiveError(Api::IoError::IoErrorCode error_code) override;
+  void onReceiveError(Api::IoError::IoErrorCode) override;
 
+  /**
+   * @return bool true if the domain_name is a known domain for which we respond to queries
+   */
   bool isKnownDomain(const absl::string_view domain_name);
 
 private:
+  /**
+   * Prepare the response buffer and send it to the client
+   */
   virtual void sendDnsResponse();
-  virtual DnsLookupResponse getResponseForQuery();
+
+  /**
+   * @brief Encapsulates all of the logic required to find an answer for a DNS query
+   *
+   * @return DnsLookupResponseCode indicating whether we were able to respond to the query or send
+   * the query to an external resolver
+   */
+  virtual DnsLookupResponseCode getResponseForQuery();
+
+  /**
+   * @return uint32_t retrieves the configured per domain TTL to be inserted into answer records
+   */
+  uint32_t getDomainTTL(const absl::string_view domain);
+
+  /**
+   * Resolves the supplied query from configured clusters
+   * @param query query object containing the name to be resolved
+   * @return bool true if the requested name matched a cluster and an answer record was constructed
+   */
   bool resolveViaClusters(const DnsQueryRecordPtr& query);
+
+  /**
+   * Resolves the supplied query from configured hosts
+   * @param query query object containing the name to be resolved
+   * @return bool true if the requested name matches a confgured domain and answer records can be
+   * constructed
+   */
   bool resolveViaConfiguredHosts(const DnsQueryRecordPtr& query);
 
   const DnsFilterEnvoyConfigSharedPtr config_;

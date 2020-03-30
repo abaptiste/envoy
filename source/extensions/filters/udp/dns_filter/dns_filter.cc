@@ -42,6 +42,11 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
         }
       }
       virtual_domains_.emplace(virtual_domain.name(), std::move(addrs));
+
+      uint64_t ttl = virtual_domain.has_answer_ttl()
+                         ? DurationUtil::durationToSeconds(virtual_domain.answer_ttl())
+                         : DefaultResolverTTLs;
+      domain_ttl_.emplace(virtual_domain.name(), ttl);
     }
 
     // Add known domains
@@ -65,7 +70,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
   }
 
-  static constexpr uint64_t DefaultResolverTimeoutMs = 500;
   resolver_timeout_ms_ = std::chrono::milliseconds(
       PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, DefaultResolverTimeoutMs));
 }
@@ -84,34 +88,14 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
   // we build an answer record from each IP resolved, then send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
     for (const auto& ip : iplist) {
-      message_parser_->buildDnsAnswerRecord(query, 300, std::move(ip));
+      uint16_t ttl = getDomainTTL(query->name_);
+      message_parser_->buildDnsAnswerRecord(query, ttl, std::move(ip));
     }
     sendDnsResponse();
   };
 
   resolver_ = std::make_unique<DnsFilterResolver>(
       answer_callback_, config->resolvers(), config->resolver_timeout(), listener_.dispatcher());
-}
-
-bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
-
-  const auto& known_suffixes = config_->known_suffixes();
-
-  // If we don't have a list of whitelisted domain suffixes, we will immediately
-  // resolve the name with an upstream DNS server
-  if (known_suffixes.empty()) {
-    ENVOY_LOG(trace, "Known domains list is empty");
-    return false;
-  }
-
-  // TODO: Use a trie to find match instead of iterating through the list
-  for (auto& suffix : known_suffixes) {
-    if (suffix->match(domain_name)) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
@@ -128,19 +112,107 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   // We were not able to satisfy the request locally. Return an
   // empty response to the client
-  if (response == DnsLookupResponse::Failure) {
+  if (response == DnsLookupResponseCode::Failure) {
     sendDnsResponse();
     return;
   }
 
   // Externally resolved. We'll respond to the client when the
   // external DNS resolution callback returns
-  if (response == DnsLookupResponse::External) {
+  if (response == DnsLookupResponseCode::External) {
     return;
   }
 
   // We have an answer. Send it to the client
   sendDnsResponse();
+}
+
+void DnsFilter::sendDnsResponse() {
+
+  // Clear any cruft in the outgoing buffer
+  response_.drain(response_.length());
+
+  // This serializes the generated response to the parse query from the client. If there is a
+  // parsing error or the incoming query is invalid, we will still generate a valid DNS response
+  message_parser_->buildResponseBuffer(response_);
+
+  Network::UdpSendData response_data{local_->ip(), *peer_, response_};
+  listener_.send(response_data);
+}
+
+DnsLookupResponseCode DnsFilter::getResponseForQuery() {
+
+  const auto& queries = message_parser_->getQueries();
+
+  // It appears to be a rare case where we would have more than one query in a single request. It is
+  // allowed by the protocol but not widely supported:
+  //
+  // https://stackoverflow.com/a/4083071
+
+  // The number of queries will almost always be one. This governed by the 'questions' field in the
+  // flags. Since the protocol allows for more than one query, we will handle this case.
+  for (const auto& query : queries) {
+
+    // Try to resolve the query locally. If forwarding the query externally is disabled we will
+    // always attempt to resolve with the configured domains
+    if (isKnownDomain(query->name_) || !config_->forward_queries()) {
+
+      // Determine whether the name is a cluster. Move on to the next query if successful
+      if (resolveViaClusters(query)) {
+        continue;
+      }
+
+      // Determine whether we an answer this query with the static configuration
+      if (resolveViaConfiguredHosts(query)) {
+        continue;
+      }
+    }
+
+    ENVOY_LOG(debug, "resolving name [{}] via external resolvers", query->name_);
+    resolver_->resolve_query(query);
+    return DnsLookupResponseCode::External;
+  }
+
+  if (message_parser_->queriesUnanswered()) {
+    return DnsLookupResponseCode::Failure;
+  }
+  return DnsLookupResponseCode::Success;
+}
+
+uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
+  uint32_t ttl;
+
+  const auto& domain_ttl_config = config_->domain_ttl();
+  const auto& iter = domain_ttl_config.find(domain);
+
+  if (iter == domain_ttl_config.end()) {
+    ttl = static_cast<uint32_t>(DnsFilterEnvoyConfig::DefaultResolverTTLs);
+  } else {
+    ttl = static_cast<uint32_t>(iter->second);
+  }
+
+  return ttl;
+}
+
+bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
+
+  const auto& known_suffixes = config_->known_suffixes();
+
+  // If we don't have a list of whitelisted domain suffixes, we will resolve the name with an
+  // external DNS server
+  if (known_suffixes.empty()) {
+    ENVOY_LOG(trace, "Known domains list is empty");
+    return false;
+  }
+
+  // TODO: Use a trie to find a match instead of iterating through the list
+  for (auto& suffix : known_suffixes) {
+    if (suffix->match(domain_name)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
@@ -152,7 +224,8 @@ bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
 
   Upstream::HostConstSharedPtr host = cluster->loadBalancer().chooseHost(nullptr);
   if (host != nullptr) {
-    message_parser_->buildDnsAnswerRecord(query, 300, std::move(host->address()));
+    const uint32_t ttl = getDomainTTL(query->name_);
+    message_parser_->buildDnsAnswerRecord(query, ttl, std::move(host->address()));
   }
 
   return (host != nullptr);
@@ -171,81 +244,25 @@ bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {
 
   const auto& configured_address_list = iter->second;
   if (configured_address_list.empty()) {
-    ENVOY_LOG(debug, "Domain [{}] list is empty", query->name_);
+    ENVOY_LOG(debug, "Domain [{}] address list is empty", query->name_);
     return false;
   }
 
-  // Build the answer records from each IP address we have
+  // Build an answer record from each configured IP address
   uint64_t hosts_found = 0;
   for (const auto& configured_address : configured_address_list) {
     ASSERT(configured_address != nullptr);
     ENVOY_LOG(debug, "using address {} for domain [{}]",
               configured_address->ip()->addressAsString(), query->name_);
     ++hosts_found;
-    message_parser_->buildDnsAnswerRecord(query, 300, configured_address);
+    const uint32_t ttl = getDomainTTL(query->name_);
+    message_parser_->buildDnsAnswerRecord(query, ttl, configured_address);
   }
   return (hosts_found > 0);
 }
 
-DnsLookupResponse DnsFilter::getResponseForQuery() {
-
-  const auto& queries = message_parser_->getQueries();
-
-  // It appears to be a rare case where we would have more than one query in a single request. It is
-  // allowed by the protocol but not widely supported:
-  //
-  // https://stackoverflow.com/a/4083071
-
-  // TODO: Do we assert that there is only one query here?
-  for (const auto& query : queries) {
-
-    // Try to resolve the query locally. If forwarding the query externally is disabled we will
-    // always attempt to resolve with the configured domains
-    if (isKnownDomain(query->name_) || !config_->forward_queries()) {
-
-      // Determine whether the name is a cluster. Move on to the next query if successful
-      if (resolveViaClusters(query)) {
-        continue;
-      }
-
-      if (resolveViaConfiguredHosts(query)) {
-        continue;
-      }
-    }
-
-    // We don't have a statically configured record for the domain or it's unknown resolve it
-    // externally
-    ENVOY_LOG(debug, "Domain [{}] is not known", query->name_);
-
-    // When the callback executes it will execute a callback to build a response and send it to
-    // the client
-    resolver_->resolve_query(query);
-
-    return DnsLookupResponse::External;
-  }
-
-  if (message_parser_->queriesUnanswered()) {
-    return DnsLookupResponse::Failure;
-  }
-  return DnsLookupResponse::Success;
-}
-
-void DnsFilter::sendDnsResponse() {
-
-  // Clear any cruft in the outgoing buffer
-  response_.drain(response_.length());
-
-  // This serializes the generated response to the parse query from the client. If there is a
-  // parsing error or the incoming query is invalid, we will still generate a valid DNS response
-  message_parser_->buildResponseBuffer(response_);
-
-  Network::UdpSendData response_data{local_->ip(), *peer_, response_};
-  listener_.send(response_data);
-}
-
-void DnsFilter::onReceiveError(Api::IoError::IoErrorCode error_code) {
+void DnsFilter::onReceiveError(Api::IoError::IoErrorCode) {
   // config_->stats().downstream_sess_rx_errors_.inc();
-  UNREFERENCED_PARAMETER(error_code);
 }
 
 } // namespace DnsFilter
