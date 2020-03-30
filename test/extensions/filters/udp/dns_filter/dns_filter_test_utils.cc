@@ -10,7 +10,7 @@ namespace Utils {
 
 std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
 
-  DnsMessageStruct query{};
+  DnsHeaderStruct query{};
 
   // Generate a random query ID
   query.id = 1234; // Util::generateRandom64() & 0xFFFF;

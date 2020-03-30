@@ -224,11 +224,17 @@ bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
 
   Upstream::HostConstSharedPtr host = cluster->loadBalancer().chooseHost(nullptr);
   if (host != nullptr) {
-    const uint32_t ttl = getDomainTTL(query->name_);
-    message_parser_->buildDnsAnswerRecord(query, ttl, std::move(host->address()));
+    return false;
   }
 
-  return (host != nullptr);
+  const auto& address = host->address();
+  if (address == nullptr) {
+    return false;
+  }
+
+  const uint32_t ttl = getDomainTTL(query->name_);
+  message_parser_->buildDnsAnswerRecord(query, ttl, std::move(address));
+  return true;
 }
 
 bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {

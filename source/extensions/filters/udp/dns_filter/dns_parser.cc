@@ -477,7 +477,7 @@ void DnsMessageParser::setDnsResponseFlags(uint16_t answers) {
     generated_.f.flags.rcode = as_integer(DnsResponseCode::FORMAT_ERROR);
   } else {
     generated_.f.flags.rcode =
-        as_integer(answers_.empty() ? DnsResponseCode::NAME_ERROR : DnsResponseCode::NO_ERROR);
+        as_integer(answers == 0 ? DnsResponseCode::NAME_ERROR : DnsResponseCode::NO_ERROR);
   }
 
   // Set the number of questions we are responding to
