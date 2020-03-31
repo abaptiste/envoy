@@ -37,7 +37,7 @@ public:
    * @brief entry point to resolve the name in a DnsQueryRecord
    *
    * This function uses the query object to determine whether it is requesting an A or AAAA record
-   * for the given name.  When the resolver callback executes, this will execute a DNS Filter
+   * for the given name. When the resolver callback executes, this will execute a DNS Filter
    * callback in order to build the answer object returned to the client.
    *
    * @param domain_query the query record object containing the name for which we are resolving
@@ -59,8 +59,8 @@ private:
   }
 
   /**
-   * Invoke the DNS Filter callback after explicitly clearing the resolved hosts list.  The filter
-   * will respond approrpriately.
+   * Invoke the DNS Filter callback after explicitly clearing the resolved hosts list. The filter
+   * will respond appropriately.
    */
   void onResolveTimeout() {
     // If the resolution status is not Pending, then we've already completed the lookup and

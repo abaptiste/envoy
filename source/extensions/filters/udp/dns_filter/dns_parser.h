@@ -79,7 +79,7 @@ protected:
 };
 
 /**
- * DnsQueryRecord represents a query record parsed from a DNS request from a client.  Each query
+ * DnsQueryRecord represents a query record parsed from a DNS request from a client. Each query
  * record contains the domain requested and the flags dictating the type of record that is sought.
  */
 class DnsQueryRecord : public BaseDnsRecord {
@@ -133,7 +133,7 @@ enum class DnsQueryParseState {
 class DnsMessageParser;
 
 /**
- * This class operates on a DNS record.  It contains all functions to parse and store Query and
+ * This class operates on a DNS record. It contains all functions to parse and store Query and
  * Answer records.
  */
 class DnsObject {
@@ -159,7 +159,7 @@ public:
    * @brief parse a single query record from a client request
    *
    * @param buffer a reference to the incoming request object received by the listener
-   * @param offset the buffer offset at which parsing is to begin.  This parameter is updated when
+   * @param offset the buffer offset at which parsing is to begin. This parameter is updated when
    * one record is parsed from the buffer and returned to the caller.
    * @return DnsQueryRecordPtr a pointer to a DnsQueryRecord object containing all query data parsed
    * from the buffer
@@ -171,7 +171,7 @@ public:
    * @brief parse a single answer record from a client request
    *
    * @param buffer a reference to a buffer containing a DNS response
-   * @param offset the buffer offset at which parsing is to begin.  This parameter is updated when
+   * @param offset the buffer offset at which parsing is to begin. This parameter is updated when
    * one record is parsed from the buffer and returned to the caller.
    * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
    * parsed from the buffer
@@ -198,12 +198,17 @@ public:
   /**
    * @return a reference to a map associating the query name to the list of answers
    */
-  virtual const DnsAnswerMap& getAnswers() { return answers_; }
+  virtual const DnsAnswerMap& getAnswerRecords() { return answers_; }
 
   /**
    * @return uint16_t the response code flag value from a parsed dns object
    */
   virtual uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.f.flags.rcode); }
+
+  /**
+   * @return uint16_t the number of answer records in the parsed dns object
+   */
+  virtual uint16_t getAnswers() { return incoming_.answers; }
 
   /**
    * @return uint16_t the response code flag value from a generated dns object

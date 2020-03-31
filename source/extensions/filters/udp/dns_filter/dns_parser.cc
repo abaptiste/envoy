@@ -73,6 +73,7 @@ inline void BaseDnsRecord::serializeName() {
   size_t last = 0;
   size_t count = name_.find_first_of(SEPARATOR);
   auto iter = name_.begin();
+
   while (count != std::string::npos) {
 
     count -= last;
@@ -232,6 +233,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   // Most times we will have only one query here.
   for (auto index = 0; index < incoming_.questions; index++) {
+    ENVOY_LOG_MISC(trace, "Parsing [{}/{}] questions", index, incoming_.questions);
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG_MISC(error, "Couldn't parse query record from buffer");
@@ -242,6 +244,7 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
 
   // Parse all answer records and store them
   for (auto index = 0; index < incoming_.answers; index++) {
+    ENVOY_LOG_MISC(trace, "Parsing [{}/{}] answers", index, incoming_.answers);
     auto rec = parseDnsAnswerRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG_MISC(error, "Couldn't parse answer record from buffer");
@@ -277,7 +280,7 @@ const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffe
 
     } else if (c == 0x00) {
       // We've reached the end of the query.
-      ENVOY_LOG_MISC(trace, "End of name: {}", c, *name_offset);
+      ENVOY_LOG_MISC(trace, "End of name: [{}] {}", name_ss.str(), *name_offset);
       break;
     }
 
@@ -316,6 +319,8 @@ const std::string DnsObject::parseDnsNameRecord(const Buffer::InstancePtr& buffe
 DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
                                                    uint64_t* offset) {
 
+  dumpBuffer(__func__, buffer, *offset);
+
   uint64_t data_offset = *offset;
   uint64_t available_bytes = buffer->length() - data_offset;
 
@@ -340,12 +345,16 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   available_bytes -= sizeof(record_type);
   ASSERT(available_bytes);
 
+  ENVOY_LOG_MISC(trace, "Record type [{}]: offset: {}", record_type, data_offset);
+
   //  Parse the record class
   uint16_t record_class;
   record_class = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(record_class);
   available_bytes -= sizeof(record_class);
   ASSERT(available_bytes);
+
+  ENVOY_LOG_MISC(trace, "Record class [{}]: offset: {}", record_class, data_offset);
 
   //  Parse the record TTL
   uint32_t ttl;
@@ -354,12 +363,16 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
   available_bytes -= sizeof(ttl);
   ASSERT(available_bytes);
 
+  ENVOY_LOG_MISC(trace, "Record ttl [{}]: offset: {}", ttl, data_offset);
+
   //  Parse the Data Length and address data record
   uint16_t data_length;
   data_length = buffer->peekBEInt<uint16_t>(data_offset);
   data_offset += sizeof(data_length);
   available_bytes -= sizeof(data_length);
   ASSERT(available_bytes);
+
+  ENVOY_LOG_MISC(trace, "Record data length [{}]: offset: {}", data_length, data_offset);
 
   if (available_bytes < data_length) {
     ENVOY_LOG_MISC(error,
@@ -377,6 +390,9 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
     sockaddr_in sa4;
     sa4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
     ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
+
+    data_offset += data_length;
+
   } else if (record_type == DnsRecordType::AAAA) {
     sockaddr_in6 sa6;
     uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
@@ -388,11 +404,9 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
     ip_addr = std::make_shared<Network::Address::Ipv6Instance>(sa6, true);
   }
 
-  data_offset += data_length;
-
   ASSERT(ip_addr != nullptr);
-  ENVOY_LOG_MISC(debug, "Parsed address [{}] from record type [{}]",
-                 ip_addr->ip()->addressAsString(), record_type);
+  ENVOY_LOG_MISC(debug, "Parsed address [{}] from record type [{}]: offset {}",
+                 ip_addr->ip()->addressAsString(), record_type, data_offset);
 
   *offset = data_offset;
 
@@ -424,7 +438,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
   record_type = buffer->peekBEInt<uint16_t>(name_offset);
   name_offset += sizeof(record_type);
 
-  // Read the record class.  This value is almost always 1 for internet address records
+  // Read the record class. This value is almost always 1 for internet address records
   uint16_t record_class;
   record_class = buffer->peekBEInt<uint16_t>(name_offset);
   name_offset += sizeof(record_class);
@@ -439,7 +453,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
 
   *offset = name_offset;
 
-  return std::move(rec);
+  return rec;
 }
 
 void DnsMessageParser::setDnsResponseFlags(uint16_t answers) {
@@ -532,7 +546,7 @@ void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   // Ensure that responses stay below the 512 byte byte limit. If we are to exceed this we must add
   // DNS extension fields
   //
-  // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes.  If we support
+  // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes. If we support
   // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
   // mind.
   static constexpr uint64_t max_dns_response_size{512};

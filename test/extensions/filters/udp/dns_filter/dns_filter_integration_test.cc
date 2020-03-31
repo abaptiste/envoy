@@ -19,7 +19,33 @@ public:
   DnsFilterIntegrationTest() : BaseIntegrationTest(GetParam(), configToUse()) {}
 
   static std::string configToUse() {
-    return ConfigHelper::BASE_UDP_LISTENER_CONFIG + R"EOF(
+    return R"EOF(
+admin:
+  access_log_path: /dev/null
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 0
+static_resources:
+  clusters:
+    name: cluster_0
+    load_assignment:
+      cluster_name: cluster_0
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 0
+  listeners:
+  - name: listener_0
+    address:
+      socket_address:
+        protocol: UDP
+        address: 127.0.0.1
+        port_value: 0
+    reuse_port: true
     listener_filters:
       name: "envoy.filters.udp.dns_filter"
       typed_config:
@@ -35,9 +61,8 @@ public:
           inline_dns_table:
             external_retry_count: 3
             known_suffixes:
-            - suffix: foo1.com
-            - suffix: foo2.com
-            - suffix: foo3.com
+            - suffix: "foo1.com"
+            - suffix: "cluster_0"
             virtual_domains:
             - name: "www.foo1.com"
               endpoint:
@@ -45,17 +70,7 @@ public:
                   address:
                   - 10.0.0.1
                   - 10.0.0.2
-            - name: "www.foo2.com"
-              endpoint:
-                address_list:
-                  address:
-                  - 2001:8a:c1::2800:7
-            - name: "www.foo3.com"
-              endpoint:
-                address_list:
-                  address:
-                  - 10.0.3.1
-      )EOF";
+)EOF";
   }
 
   void setup(uint32_t upstream_count) {
@@ -122,7 +137,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_GE(1, response_parser_.getAnswers().size());
+  ASSERT_GE(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
 
@@ -141,7 +156,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_GE(1, response_parser_.getAnswers().size());
+  ASSERT_GE(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
 
@@ -160,9 +175,35 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(2, response_parser_.getAnswers().size());
+  ASSERT_EQ(2, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
+
+TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
+  setup(2);
+  const uint32_t port = lookupPort("listener_0");
+  const auto listener_address = Network::Utility::resolveUrl(
+      fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
+
+  Extensions::UdpFilters::DnsFilter::DnsRecordType record_type;
+  if (listener_address->ip()->ipv6()) {
+    record_type = Extensions::UdpFilters::DnsFilter::DnsRecordType::AAAA;
+  } else {
+    record_type = Extensions::UdpFilters::DnsFilter::DnsRecordType::A;
+  }
+
+  Network::UdpRecvData response;
+  std::string query = Utils::buildQueryForDomain(
+      "cluster_0", record_type, Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  requestResponseWithListenerAddress(*listener_address, query, response);
+
+  ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
+
+  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(2, response_parser_.getAnswers());
+  ASSERT_EQ(0, response_parser_.getQueryResponseCode());
+}
+
 } // namespace
 } // namespace DnsFilter
 } // namespace UdpFilters

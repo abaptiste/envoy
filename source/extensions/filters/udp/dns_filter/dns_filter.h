@@ -136,7 +136,7 @@ private:
   /**
    * Resolves the supplied query from configured hosts
    * @param query query object containing the name to be resolved
-   * @return bool true if the requested name matches a confgured domain and answer records can be
+   * @return bool true if the requested name matches a configured domain and answer records can be
    * constructed
    */
   bool resolveViaConfiguredHosts(const DnsQueryRecordPtr& query);

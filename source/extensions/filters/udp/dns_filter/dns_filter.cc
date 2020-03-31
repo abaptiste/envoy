@@ -144,13 +144,13 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 
   const auto& queries = message_parser_->getQueries();
 
-  // It appears to be a rare case where we would have more than one query in a single request. It is
-  // allowed by the protocol but not widely supported:
+  // It appears to be a rare case where we would have more than one query in a single request.
+  // It is allowed by the protocol but not widely supported:
   //
   // https://stackoverflow.com/a/4083071
 
-  // The number of queries will almost always be one. This governed by the 'questions' field in the
-  // flags. Since the protocol allows for more than one query, we will handle this case.
+  // The number of queries will almost always be one. This governed by the 'questions' field in
+  // the flags. Since the protocol allows for more than one query, we will handle this case.
   for (const auto& query : queries) {
 
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
@@ -219,22 +219,23 @@ bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
 
   Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query->name_);
   if (cluster == nullptr) {
+    ENVOY_LOG(debug, "Did not find a cluster for name [{}]", query->name_);
     return false;
   }
 
-  Upstream::HostConstSharedPtr host = cluster->loadBalancer().chooseHost(nullptr);
-  if (host != nullptr) {
-    return false;
-  }
-
-  const auto& address = host->address();
-  if (address == nullptr) {
-    return false;
-  }
-
+  // Return the address for all discovered endpoints
+  size_t found_addresses = 0;
   const uint32_t ttl = getDomainTTL(query->name_);
-  message_parser_->buildDnsAnswerRecord(query, ttl, std::move(address));
-  return true;
+  for (const auto& hostsets : cluster->prioritySet().hostSetsPerPriority()) {
+    for (const auto& host : hostsets->hosts()) {
+      ++found_addresses;
+      ENVOY_LOG(debug, "using cluster host address {} for domain [{}]",
+                host->address()->ip()->addressAsString(), query->name_);
+      message_parser_->buildDnsAnswerRecord(query, ttl, host->address());
+    }
+  }
+
+  return (found_addresses != 0);
 }
 
 bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {

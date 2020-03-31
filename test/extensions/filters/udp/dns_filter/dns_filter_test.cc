@@ -120,12 +120,14 @@ server_config:
       endpoint:
         address_list:
           address:
-            - 2001:8a:c1::2800:7
+          - 2001:8a:c1::2800:7
+          - 2001:8a:c1::2800:8
+          - 2001:8a:c1::2800:9
     - name: "www.foo3.com"
       endpoint:
         address_list:
           address:
-            - 10.0.3.1
+          - 10.0.3.1
   )EOF";
 
   // This config has external resolution enabled. Each test must setup the mock to save and execute
@@ -160,7 +162,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(0, response_parser_.getQueries().size());
-  ASSERT_EQ(0, response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
 
@@ -179,11 +181,11 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(1, response_parser_.getAnswers().size());
+  ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
   // Verify that we have an answer record for the queried domain
-  const auto& answers = response_parser_.getAnswers();
+  const auto& answers = response_parser_.getAnswerRecords();
   const auto answer_iter = answers.find(domain);
   ASSERT_NE(answer_iter, answers.end());
   ASSERT_EQ(1, answer_iter->second.size());
@@ -210,11 +212,11 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
     ASSERT_EQ(1, response_parser_.getQueries().size());
-    ASSERT_EQ(1, response_parser_.getAnswers().size());
+    ASSERT_EQ(1, response_parser_.getAnswers());
     ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
     // Verify that we have an answer record for the queried domain
-    const auto& answers = response_parser_.getAnswers();
+    const auto& answers = response_parser_.getAnswerRecords();
     const auto answer_iter = answers.find(domain);
     ASSERT_NE(answer_iter, answers.end());
     ASSERT_EQ(1, answer_iter->second.size());
@@ -226,7 +228,7 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
   }
 }
 
-TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
+TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   InSequence s;
 
   setup(forward_query_off_config);
@@ -240,15 +242,16 @@ TEST_F(DnsFilterTest, SingleTypeAQueryFail) {
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(0, response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
 
-TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
+TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   InSequence s;
 
   setup(forward_query_off_config);
 
+  std::list<std::string> expected{"2001:8a:c1::2800:7", "2001:8a:c1::2800:8", "2001:8a:c1::2800:9"};
   const std::string domain("www.foo2.com");
   const std::string query =
       Utils::buildQueryForDomain(domain, DnsRecordType::AAAA, DnsRecordClass::IN);
@@ -259,18 +262,17 @@ TEST_F(DnsFilterTest, SingleTypeAAAAQuery) {
   response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(1, response_parser_.getAnswers().size());
+  ASSERT_EQ(expected.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
   // Verify that we have an answer record for the queried domain
-  const auto& answers = response_parser_.getAnswers();
+  const auto& answers = response_parser_.getAnswerRecords();
   const auto answer_iter = answers.find(domain);
   ASSERT_NE(answer_iter, answers.end());
-  ASSERT_EQ(1, answer_iter->second.size());
+  ASSERT_EQ(expected.size(), answer_iter->second.size());
   const DnsAnswerRecordPtr& answer = *(answer_iter->second.begin());
 
   // Verify the address returned
-  std::list<std::string> expected{"2001:8a:c1::2800:7"};
   Utils::verifyAddress(expected, answer);
 }
 
@@ -302,10 +304,10 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(1, response_parser_.getAnswers().size());
+  ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
-  const auto& answers = response_parser_.getAnswers();
+  const auto& answers = response_parser_.getAnswerRecords();
   const auto answer_iter = answers.find(domain);
   ASSERT_NE(answer_iter, answers.end());
   ASSERT_EQ(1, answer_iter->second.size());
@@ -347,12 +349,12 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
 
   ASSERT_LT(response_ptr->length(), Utils::MAX_UDP_DNS_SIZE);
   ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(expected_address.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
-  const auto& answers = response_parser_.getAnswers();
+  const auto& answers = response_parser_.getAnswerRecords();
   const auto answer_iter = answers.find(domain);
   ASSERT_NE(answer_iter, answers.end());
-  ASSERT_EQ(expected_address.size(), answer_iter->second.size());
 
   for (const auto& answer : answer_iter->second) {
     Utils::verifyAddress(expected_address, answer);
@@ -388,7 +390,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_EQ(1, response_parser_.getQueries().size());
-  ASSERT_EQ(0, response_parser_.getAnswers().size());
+  ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
