@@ -136,7 +136,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_GE(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
@@ -155,7 +155,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_GE(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
@@ -174,7 +174,7 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(2, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }
@@ -199,7 +199,7 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response.buffer_));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(2, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 }

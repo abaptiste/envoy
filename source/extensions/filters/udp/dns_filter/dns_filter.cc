@@ -3,7 +3,6 @@
 #include "envoy/network/listener.h"
 #include "envoy/type/matcher/v3/string.pb.h"
 
-#include "common/common/empty_string.h"
 #include "common/network/address_impl.h"
 
 namespace Envoy {
@@ -27,7 +26,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     const auto& dns_table = server_config.inline_dns_table();
     const size_t entries = dns_table.virtual_domains().size();
 
-    // TODO: support wildcard matching to eventually eliminate having two sets of domains
     virtual_domains_.reserve(entries);
     for (const auto& virtual_domain : dns_table.virtual_domains()) {
       AddressConstPtrVec addrs{};
@@ -76,20 +74,19 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
-    : UdpListenerReadFilter(callbacks), config_(config),
-      cluster_manager_(config_->cluster_manager()), listener_(callbacks.udpListener())
+    : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
+      cluster_manager_(config_->cluster_manager()),
+      message_parser_(std::make_unique<DnsMessageParser>())
 
 {
-  message_parser_ = std::make_unique<DnsMessageParser>();
-
-  // TODO retries, TTL.
+  // TODO retries
 
   // This callback is executed when the dns resolution completes. At that time
   // we build an answer record from each IP resolved, then send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
     for (const auto& ip : iplist) {
       uint16_t ttl = getDomainTTL(query->name_);
-      message_parser_->buildDnsAnswerRecord(query, ttl, std::move(ip));
+      message_parser_->buildDnsAnswerRecord(*query, ttl, std::move(ip));
     }
     sendDnsResponse();
   };
@@ -104,8 +101,11 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   local_ = client_request.addresses_.local_;
   peer_ = client_request.addresses_.peer_;
 
-  // Parse the query
-  message_parser_->parseDnsObject(client_request.buffer_);
+  // Parse the query, if it fails return an response to the client
+  if (!message_parser_->parseDnsObject(client_request.buffer_)) {
+    sendDnsResponse();
+    return;
+  }
 
   // Resolve the requested name
   auto response = getResponseForQuery();
@@ -142,28 +142,35 @@ void DnsFilter::sendDnsResponse() {
 
 DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 
-  const auto& queries = message_parser_->getQueries();
+  auto& query_map = message_parser_->getActiveQueryRecords();
 
   // It appears to be a rare case where we would have more than one query in a single request.
   // It is allowed by the protocol but not widely supported:
   //
   // https://stackoverflow.com/a/4083071
 
+  const uint16_t id = message_parser_->getCurrentQueryId();
+  const auto& query_iter = query_map.find(id);
+
+  if (query_iter == query_map.end()) {
+    ENVOY_LOG_MISC(error, "Unable to find queries for the current transaction id: {}", id);
+  }
+
   // The number of queries will almost always be one. This governed by the 'questions' field in
   // the flags. Since the protocol allows for more than one query, we will handle this case.
-  for (const auto& query : queries) {
+  for (const auto& query : query_iter->second) {
 
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forward_queries()) {
 
       // Determine whether the name is a cluster. Move on to the next query if successful
-      if (resolveViaClusters(query)) {
+      if (resolveViaClusters(*query)) {
         continue;
       }
 
       // Determine whether we an answer this query with the static configuration
-      if (resolveViaConfiguredHosts(query)) {
+      if (resolveViaConfiguredHosts(*query)) {
         continue;
       }
     }
@@ -173,7 +180,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
     return DnsLookupResponseCode::External;
   }
 
-  if (message_parser_->queriesUnanswered()) {
+  if (message_parser_->queriesUnanswered(id)) {
     return DnsLookupResponseCode::Failure;
   }
   return DnsLookupResponseCode::Success;
@@ -215,43 +222,42 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
   return false;
 }
 
-bool DnsFilter::resolveViaClusters(const DnsQueryRecordPtr& query) {
+bool DnsFilter::resolveViaClusters(const DnsQueryRecord& query) {
 
-  Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query->name_);
+  Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query.name_);
   if (cluster == nullptr) {
-    ENVOY_LOG(debug, "Did not find a cluster for name [{}]", query->name_);
+    ENVOY_LOG(debug, "Did not find a cluster for name [{}]", query.name_);
     return false;
   }
 
   // Return the address for all discovered endpoints
-  size_t found_addresses = 0;
-  const uint32_t ttl = getDomainTTL(query->name_);
+  size_t discovered_endpoints = 0;
+  const uint32_t ttl = getDomainTTL(query.name_);
   for (const auto& hostsets : cluster->prioritySet().hostSetsPerPriority()) {
     for (const auto& host : hostsets->hosts()) {
-      ++found_addresses;
+      ++discovered_endpoints;
       ENVOY_LOG(debug, "using cluster host address {} for domain [{}]",
-                host->address()->ip()->addressAsString(), query->name_);
+                host->address()->ip()->addressAsString(), query.name_);
       message_parser_->buildDnsAnswerRecord(query, ttl, host->address());
     }
   }
-
-  return (found_addresses != 0);
+  return (discovered_endpoints != 0);
 }
 
-bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {
+bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecord& query) {
 
   const auto& domains = config_->domains();
 
   // TODO: If we have a large ( > 100) domain list, use a binary search.
-  const auto iter = domains.find(query->name_);
+  const auto iter = domains.find(query.name_);
   if (iter == domains.end()) {
-    ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query->name_);
+    ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query.name_);
     return false;
   }
 
   const auto& configured_address_list = iter->second;
   if (configured_address_list.empty()) {
-    ENVOY_LOG(debug, "Domain [{}] address list is empty", query->name_);
+    ENVOY_LOG(debug, "Domain [{}] address list is empty", query.name_);
     return false;
   }
 
@@ -260,9 +266,9 @@ bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecordPtr& query) {
   for (const auto& configured_address : configured_address_list) {
     ASSERT(configured_address != nullptr);
     ENVOY_LOG(debug, "using address {} for domain [{}]",
-              configured_address->ip()->addressAsString(), query->name_);
+              configured_address->ip()->addressAsString(), query.name_);
     ++hosts_found;
-    const uint32_t ttl = getDomainTTL(query->name_);
+    const uint32_t ttl = getDomainTTL(query.name_);
     message_parser_->buildDnsAnswerRecord(query, ttl, configured_address);
   }
   return (hosts_found > 0);

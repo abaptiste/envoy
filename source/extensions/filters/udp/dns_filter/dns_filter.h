@@ -2,21 +2,17 @@
 
 #include "envoy/config/filter/udp/dns_filter/v2alpha/dns_filter.pb.h"
 #include "envoy/event/file_event.h"
-#include "envoy/event/timer.h"
 #include "envoy/network/filter.h"
-#include "envoy/upstream/cluster_manager.h"
 
 #include "common/buffer/buffer_impl.h"
 #include "common/common/matchers.h"
 #include "common/config/config_provider_impl.h"
 #include "common/network/utility.h"
-#include "common/runtime/runtime_impl.h"
 
 #include "extensions/filters/udp/dns_filter/dns_filter_resolver.h"
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/synchronization/notification.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -131,7 +127,7 @@ private:
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matched a cluster and an answer record was constructed
    */
-  bool resolveViaClusters(const DnsQueryRecordPtr& query);
+  bool resolveViaClusters(const DnsQueryRecord& query);
 
   /**
    * Resolves the supplied query from configured hosts
@@ -139,13 +135,14 @@ private:
    * @return bool true if the requested name matches a configured domain and answer records can be
    * constructed
    */
-  bool resolveViaConfiguredHosts(const DnsQueryRecordPtr& query);
+  bool resolveViaConfiguredHosts(const DnsQueryRecord& query);
 
   const DnsFilterEnvoyConfigSharedPtr config_;
+  Network::UdpListener& listener_;
+
+  Upstream::ClusterManager& cluster_manager_;
 
   DnsMessageParserPtr message_parser_;
-  Upstream::ClusterManager& cluster_manager_;
-  Network::UdpListener& listener_;
   DnsFilterResolverPtr resolver_;
 
   Network::Address::InstanceConstSharedPtr local_;

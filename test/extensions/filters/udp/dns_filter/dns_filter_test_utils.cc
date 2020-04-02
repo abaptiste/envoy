@@ -10,10 +10,12 @@ namespace Utils {
 
 std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
 
+  Runtime::RandomGeneratorImpl random_;
   DnsHeaderStruct query{};
+  uint16_t id = random_.random() & 0xFFFF;
 
   // Generate a random query ID
-  query.id = 1234; // Util::generateRandom64() & 0xFFFF;
+  query.id = id;
 
   // Signify that this is a query
   query.f.flags.qr = 0;
@@ -48,7 +50,7 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
   buffer_.writeBEInt<uint16_t>(query.authority_rrs);
   buffer_.writeBEInt<uint16_t>(query.additional_rrs);
 
-  DnsQueryRecordPtr query_ptr = std::make_unique<DnsQueryRecord>(name, rec_type, rec_class);
+  DnsQueryRecordPtr query_ptr = std::make_unique<DnsQueryRecord>(id, name, rec_type, rec_class);
 
   buffer_.add(query_ptr->serialize());
 
@@ -69,6 +71,18 @@ void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecor
 
   const auto iter = std::find(addresses.begin(), addresses.end(), resolved_address);
   ASSERT_TRUE(iter != addresses.end());
+}
+
+size_t getResponseQuerySize(DnsMessageParser& parser) {
+  const uint16_t id = parser.getCurrentQueryId();
+  const auto& queries = parser.getActiveQueryRecords();
+
+  const auto& current_queries = queries.find(id);
+  if (current_queries == queries.end()) {
+    return 0;
+  }
+
+  return current_queries->second.size();
 }
 
 } // namespace Utils

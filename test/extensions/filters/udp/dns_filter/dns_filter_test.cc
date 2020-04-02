@@ -161,7 +161,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(0, response_parser_.getQueries().size());
+  ASSERT_EQ(0, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
@@ -180,7 +180,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -202,16 +202,17 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
   setup(forward_query_off_config);
 
   const std::string domain("www.foo3.com");
-  const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
-  ASSERT_FALSE(query.empty());
 
   for (size_t i = 0; i < 5; i++) {
+    const std::string query =
+        Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+    ASSERT_FALSE(query.empty());
     sendQueryFromClient("10.0.0.1:1000", query);
 
+    response_parser_.reset();
     ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-    ASSERT_EQ(1, response_parser_.getQueries().size());
+    ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
     ASSERT_EQ(1, response_parser_.getAnswers());
     ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -241,7 +242,7 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
@@ -261,7 +262,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
 
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(expected.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -303,7 +304,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   // parse the result
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -348,7 +349,7 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
   response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_LT(response_ptr->length(), Utils::MAX_UDP_DNS_SIZE);
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(expected_address.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -389,7 +390,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   // parse the result
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, response_parser_.getQueries().size());
+  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 
