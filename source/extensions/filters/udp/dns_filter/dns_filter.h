@@ -52,7 +52,6 @@ public:
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
   std::list<Matchers::StringMatcherPtr>& known_suffixes() const { return known_suffixes_; }
   absl::flat_hash_map<std::string, uint64_t>& domain_ttl() const { return domain_ttl_; }
-  Upstream::ClusterManager& cluster_manager() const { return cluster_manager_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forward_queries() const { return forward_queries_; }
   std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
@@ -67,7 +66,6 @@ private:
   }
 
   Stats::Scope& root_scope;
-  Upstream::ClusterManager& cluster_manager_;
 
   mutable DnsFilterStats stats_;
   mutable DnsVirtualDomainConfig virtual_domains_;
@@ -93,7 +91,7 @@ public:
       : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
         message_parser_(std::make_unique<DnsMessageParser>()) {}
 
-  // Network::UdpListenerReadFilter
+  // Network::UdpListenerReadFilter callbacks
   void onData(Network::UdpRecvData& client_request) override;
   void onReceiveError(Api::IoError::IoErrorCode) override;
 

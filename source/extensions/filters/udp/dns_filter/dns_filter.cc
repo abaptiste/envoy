@@ -13,8 +13,7 @@ namespace DnsFilter {
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config)
-    : root_scope(context.scope()), cluster_manager_(context.clusterManager()),
-      stats_(generateStats(config.stat_prefix(), root_scope)) {
+    : root_scope(context.scope()), stats_(generateStats(config.stat_prefix(), root_scope)) {
 
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 

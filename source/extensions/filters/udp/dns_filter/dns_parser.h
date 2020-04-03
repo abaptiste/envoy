@@ -11,16 +11,8 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-namespace {
-template <typename Enumeration>
-auto as_integer(Enumeration const value) -> typename std::underlying_type<Enumeration>::type {
-  return static_cast<typename std::underlying_type<Enumeration>::type>(value);
-}
-} // namespace
-
-// The flags have been verified with dig and this structure should not be modified. The flag order
-// does not match the RFC, but takes byte ordering into account so that serialization does not need
-// and-ing or shifting.
+// Theese flags have been verified with dig. The flag order does not match the RFC, but takes byte
+// ordering into account so that serialization does not need bitwise operations
 PACKED_STRUCT(struct dns_query_flags_s {
   unsigned rcode : 4;  // return code
   unsigned cd : 1;     // checking disabled
@@ -55,7 +47,7 @@ using DnsHeaderStruct = struct dns_header_s;
 
 enum DnsRecordClass { IN = 1 };
 enum DnsRecordType { A = 1, AAAA = 28 };
-enum class DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
+enum DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
 
 /**
  * BaseDnsRecord contains the fields and functions common to both query and answer records.
@@ -80,8 +72,8 @@ protected:
 };
 
 /**
- * DnsQueryRecord represents a query record parsed from a DNS request from a client. Each query
- * record contains the domain requested and the flags dictating the type of record that is sought.
+ * DnsQueryRecord represents a query record parsed from a DNS request from a client. Each record
+ * contains the ID, domain requested and the flags dictating the type of record that is sought.
  */
 class DnsQueryRecord : public BaseDnsRecord {
 
@@ -144,13 +136,6 @@ class DnsObject {
 public:
   DnsObject() : active_transactions_(), queries_(), answers_() {}
   virtual ~DnsObject(){};
-
-  // TODO: Do not include this in the PR
-  void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
-                  const uint64_t offset = 0);
-
-  // TODO: Do not include this in the PR
-  void dumpFlags(const DnsHeaderStruct& queryObj);
 
   /**
    * @param buffer a reference to the incoming request object received by the listener
@@ -241,14 +226,14 @@ private:
                                        uint64_t* name_offset);
 
   /**
-   * @brief updates the map associating a query with a list of DnsAnswerRecord pointers
+   * @brief updates a map associating a query with a list of DnsAnswerRecord pointers
    *
    * @param rec the answer record that is to be added to the answer list
    */
   void storeAnswerRecord(DnsAnswerRecordPtr rec);
 
   /**
-   * @brief updates the map associating a query id with a list of DnsQueryRecord pointers
+   * @brief updates a map associating a query id with a list of DnsQueryRecord pointers
    *
    * @param rec the answer record that is to be added to the answer list
    */

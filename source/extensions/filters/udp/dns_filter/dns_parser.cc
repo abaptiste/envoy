@@ -360,9 +360,8 @@ DnsAnswerRecordPtr DnsObject::parseDnsAnswerRecord(const Buffer::InstancePtr& bu
 
   *offset = data_offset;
 
-  auto rec = std::make_unique<DnsAnswerRecord>(static_cast<uint16_t>(incoming_.id), record_name,
-                                               record_type, record_class, ttl, std::move(ip_addr));
-  return std::move(rec);
+  return std::make_unique<DnsAnswerRecord>(static_cast<uint16_t>(incoming_.id), record_name,
+                                           record_type, record_class, ttl, std::move(ip_addr));
 }
 
 DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -405,7 +404,7 @@ DnsQueryRecordPtr DnsObject::parseDnsQueryRecord(const Buffer::InstancePtr& buff
 
   *offset = name_offset;
 
-  return std::move(rec);
+  return rec;
 }
 
 void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint16_t answers) {
@@ -439,10 +438,10 @@ void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint1
 
   // The ID must be non-zero so that we can associate the response with the query
   if (incoming_.id == 0) {
-    generated_.f.flags.rcode = as_integer(DnsResponseCode::FORMAT_ERROR);
+    generated_.f.flags.rcode = DnsResponseCode::FORMAT_ERROR;
   } else {
     generated_.f.flags.rcode =
-        as_integer(answers == 0 ? DnsResponseCode::NAME_ERROR : DnsResponseCode::NO_ERROR);
+        answers == 0 ? DnsResponseCode::NAME_ERROR : DnsResponseCode::NO_ERROR;
   }
 
   // Set the number of questions we are responding to
