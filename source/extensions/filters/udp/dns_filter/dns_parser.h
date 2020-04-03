@@ -11,7 +11,7 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-// Theese flags have been verified with dig. The flag order does not match the RFC, but takes byte
+// These flags have been verified with dig. The flag order does not match the RFC, but takes byte
 // ordering into account so that serialization does not need bitwise operations
 PACKED_STRUCT(struct dns_query_flags_s {
   unsigned rcode : 4;  // return code
