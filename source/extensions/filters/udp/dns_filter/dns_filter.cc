@@ -13,7 +13,7 @@ namespace DnsFilter {
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config)
-    : root_scope(context.scope()), stats_(generateStats(config.stat_prefix(), root_scope)) {
+    : root_scope_(context.scope()), stats_(generateStats(config.stat_prefix(), root_scope_)) {
 
   using envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig;
 
@@ -138,7 +138,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
-    if (isKnownDomain(query->name_) || !config_->forward_queries()) {
+    if (isKnownDomain(query->name_) || !config_->forwardQueries()) {
 
       // Determine whether we an answer this query with the static configuration
       if (resolveViaConfiguredHosts(*query)) {
@@ -158,7 +158,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
   uint32_t ttl;
 
-  const auto& domain_ttl_config = config_->domain_ttl();
+  const auto& domain_ttl_config = config_->domainTtl();
   const auto& iter = domain_ttl_config.find(domain);
 
   if (iter == domain_ttl_config.end()) {
@@ -172,7 +172,7 @@ uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
 
 bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
 
-  const auto& known_suffixes = config_->known_suffixes();
+  const auto& known_suffixes = config_->knownSuffixes();
 
   // If we don't have a list of whitelisted domain suffixes, we will resolve the name with an
   // external DNS server

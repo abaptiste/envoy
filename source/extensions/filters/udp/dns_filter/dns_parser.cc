@@ -105,9 +105,9 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
   uint64_t offset = 0;
   uint16_t data;
 
-  DnsQueryParseState state_{DnsQueryParseState::INIT};
+  DnsQueryParseState state_{DnsQueryParseState::Init};
 
-  while (state_ != DnsQueryParseState::FINISH) {
+  while (state_ != DnsQueryParseState::Finish) {
 
     // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
@@ -129,37 +129,37 @@ bool DnsObject::parseDnsObject(const Buffer::InstancePtr& buffer) {
     }
 
     switch (state_) {
-    case DnsQueryParseState::INIT:
+    case DnsQueryParseState::Init:
       incoming_.id = data;
-      state_ = DnsQueryParseState::FLAGS;
+      state_ = DnsQueryParseState::Flags;
       break;
 
-    case DnsQueryParseState::FLAGS:
+    case DnsQueryParseState::Flags:
       incoming_.f.val = data;
-      state_ = DnsQueryParseState::QUESTIONS;
+      state_ = DnsQueryParseState::Questions;
       break;
 
-    case DnsQueryParseState::QUESTIONS:
+    case DnsQueryParseState::Questions:
       incoming_.questions = data;
-      state_ = DnsQueryParseState::ANSWERS;
+      state_ = DnsQueryParseState::Answers;
       break;
 
-    case DnsQueryParseState::ANSWERS:
+    case DnsQueryParseState::Answers:
       incoming_.answers = data;
-      state_ = DnsQueryParseState::AUTHORITY;
+      state_ = DnsQueryParseState::Authority;
       break;
 
-    case DnsQueryParseState::AUTHORITY:
+    case DnsQueryParseState::Authority:
       incoming_.authority_rrs = data;
-      state_ = DnsQueryParseState::AUTHORITY2;
+      state_ = DnsQueryParseState::Authority2;
       break;
 
-    case DnsQueryParseState::AUTHORITY2:
+    case DnsQueryParseState::Authority2:
       incoming_.additional_rrs = data;
-      state_ = DnsQueryParseState::FINISH;
+      state_ = DnsQueryParseState::Finish;
       break;
 
-    case DnsQueryParseState::FINISH:
+    case DnsQueryParseState::Finish:
       break;
 
     default:
@@ -438,10 +438,9 @@ void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint1
 
   // The ID must be non-zero so that we can associate the response with the query
   if (incoming_.id == 0) {
-    generated_.f.flags.rcode = DnsResponseCode::FORMAT_ERROR;
+    generated_.f.flags.rcode = DnsResponseCode::FormatError;
   } else {
-    generated_.f.flags.rcode =
-        answers == 0 ? DnsResponseCode::NAME_ERROR : DnsResponseCode::NO_ERROR;
+    generated_.f.flags.rcode = answers == 0 ? DnsResponseCode::NameError : DnsResponseCode::NoError;
   }
 
   // Set the number of questions we are responding to

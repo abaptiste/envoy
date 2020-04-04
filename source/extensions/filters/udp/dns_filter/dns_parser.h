@@ -13,7 +13,7 @@ namespace DnsFilter {
 
 // These flags have been verified with dig. The flag order does not match the RFC, but takes byte
 // ordering into account so that serialization does not need bitwise operations
-PACKED_STRUCT(struct dns_query_flags_s {
+PACKED_STRUCT(struct DnsHeaderFlags {
   unsigned rcode : 4;  // return code
   unsigned cd : 1;     // checking disabled
   unsigned ad : 1;     // authenticated data
@@ -26,16 +26,14 @@ PACKED_STRUCT(struct dns_query_flags_s {
   unsigned qr : 1;     // query or response
 });
 
-using dns_query_flags_t = struct dns_query_flags_s;
-
 /**
  * Structure representing the DNS header as it appears in a packet
  */
-PACKED_STRUCT(struct dns_header_s {
+PACKED_STRUCT(struct DnsHeader {
   uint16_t id;
   union {
     uint16_t val;
-    dns_query_flags_t flags;
+    struct DnsHeaderFlags flags;
   } f;
   uint16_t questions;
   uint16_t answers;
@@ -43,11 +41,9 @@ PACKED_STRUCT(struct dns_header_s {
   uint16_t additional_rrs;
 });
 
-using DnsHeaderStruct = struct dns_header_s;
-
 enum DnsRecordClass { IN = 1 };
 enum DnsRecordType { A = 1, AAAA = 28 };
-enum DnsResponseCode { NO_ERROR, FORMAT_ERROR, SERVER_FAILURE, NAME_ERROR, NOT_IMPLEMENTED };
+enum DnsResponseCode { NoError, FormatError, ServerFailure, NameError, NotImplemented };
 
 /**
  * BaseDnsRecord contains the fields and functions common to both query and answer records.
@@ -56,9 +52,9 @@ class BaseDnsRecord {
 public:
   BaseDnsRecord(const uint16_t id, const std::string& rec_name, const uint16_t rec_type,
                 const uint16_t rec_class)
-      : id_(id), name_(rec_name), type_(rec_type), class_(rec_class) {}
+      : id_(id), name_(rec_name), type_(rec_type), class_(rec_class) {};
 
-  virtual ~BaseDnsRecord() {}
+  virtual ~BaseDnsRecord() = default;
   virtual void serializeName();
   virtual Buffer::OwnedImpl& serialize() PURE;
 
@@ -82,7 +78,7 @@ public:
                  const uint16_t rec_class)
       : BaseDnsRecord(id, rec_name, rec_type, rec_class) {}
 
-  virtual ~DnsQueryRecord() {}
+  ~DnsQueryRecord() override = default;
   Buffer::OwnedImpl& serialize() override;
 };
 
@@ -104,7 +100,7 @@ public:
                   Network::Address::InstanceConstSharedPtr ipaddr)
       : BaseDnsRecord(id, query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
-  virtual ~DnsAnswerRecord() {}
+  ~DnsAnswerRecord() override = default;
   Buffer::OwnedImpl& serialize() override;
 
   const uint32_t ttl_;
@@ -115,14 +111,14 @@ using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = absl::flat_hash_map<std::string, std::list<DnsAnswerRecordPtr>>;
 
 enum class DnsQueryParseState {
-  INIT = 0,
-  TRANSACTION_ID, // 2 bytes
-  FLAGS,          // 2 bytes
-  QUESTIONS,      // 2 bytes
-  ANSWERS,        // 2 bytes
-  AUTHORITY,      // 2 bytes
-  AUTHORITY2,     // 2 bytes
-  FINISH
+  Init = 0,
+  TransactionId,  // 2 bytes
+  Flags,          // 2 bytes
+  Questions,      // 2 bytes
+  Answers,        // 2 bytes
+  Authority,      // 2 bytes
+  Authority2,     // 2 bytes
+  Finish
 };
 
 class DnsMessageParser;
@@ -134,8 +130,8 @@ class DnsMessageParser;
 class DnsObject {
 
 public:
-  DnsObject() : active_transactions_(), queries_(), answers_() {}
-  virtual ~DnsObject(){};
+  DnsObject() = default;
+  virtual ~DnsObject() = default;
 
   /**
    * @param buffer a reference to the incoming request object received by the listener
@@ -239,8 +235,8 @@ private:
    */
   void storeQueryRecord(DnsQueryRecordPtr rec);
 
-  DnsHeaderStruct incoming_;
-  DnsHeaderStruct generated_;
+  struct DnsHeader incoming_;
+  struct DnsHeader generated_;
   std::deque<uint16_t> active_transactions_;
 
   DnsQueryMap queries_;
@@ -252,6 +248,9 @@ private:
  */
 class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
 public:
+  DnsMessageParser() = default;
+  ~DnsMessageParser() override = default;
+
   DnsAnswerRecordPtr getResponseForQuery();
   void buildResponseBuffer(Buffer::OwnedImpl& buffer);
   uint64_t queriesUnanswered(const uint16_t id);

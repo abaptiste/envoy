@@ -50,11 +50,11 @@ public:
 
   DnsFilterStats& stats() const { return stats_; }
   DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
-  std::list<Matchers::StringMatcherPtr>& known_suffixes() const { return known_suffixes_; }
-  absl::flat_hash_map<std::string, uint64_t>& domain_ttl() const { return domain_ttl_; }
+  std::list<Matchers::StringMatcherPtr>& knownSuffixes() const { return known_suffixes_; }
+  absl::flat_hash_map<std::string, uint64_t>& domainTtl() const { return domain_ttl_; }
   AddressConstPtrVec& resolvers() const { return resolvers_; }
-  bool forward_queries() const { return forward_queries_; }
-  std::chrono::milliseconds& resolver_timeout() const { return resolver_timeout_ms_; }
+  bool forwardQueries() const { return forward_queries_; }
+  std::chrono::milliseconds& resolverTimeout() const { return resolver_timeout_ms_; }
 
   static constexpr uint64_t DefaultResolverTimeoutMs = 500;
   static constexpr uint64_t DefaultResolverTTLs = 300;
@@ -65,7 +65,7 @@ private:
     return {ALL_DNS_FILTER_STATS(POOL_COUNTER_PREFIX(scope, final_prefix))};
   }
 
-  Stats::Scope& root_scope;
+  Stats::Scope& root_scope_;
 
   mutable DnsFilterStats stats_;
   mutable DnsVirtualDomainConfig virtual_domains_;
