@@ -52,7 +52,7 @@ class BaseDnsRecord {
 public:
   BaseDnsRecord(const uint16_t id, const std::string& rec_name, const uint16_t rec_type,
                 const uint16_t rec_class)
-      : id_(id), name_(rec_name), type_(rec_type), class_(rec_class) {};
+      : id_(id), name_(rec_name), type_(rec_type), class_(rec_class){};
 
   virtual ~BaseDnsRecord() = default;
   virtual void serializeName();
@@ -112,12 +112,12 @@ using DnsAnswerMap = absl::flat_hash_map<std::string, std::list<DnsAnswerRecordP
 
 enum class DnsQueryParseState {
   Init = 0,
-  TransactionId,  // 2 bytes
-  Flags,          // 2 bytes
-  Questions,      // 2 bytes
-  Answers,        // 2 bytes
-  Authority,      // 2 bytes
-  Authority2,     // 2 bytes
+  TransactionId, // 2 bytes
+  Flags,         // 2 bytes
+  Questions,     // 2 bytes
+  Answers,       // 2 bytes
+  Authority,     // 2 bytes
+  Authority2,    // 2 bytes
   Finish
 };
 
