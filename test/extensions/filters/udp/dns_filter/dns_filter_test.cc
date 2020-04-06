@@ -1,5 +1,5 @@
-#include "envoy/config/filter/udp/dns_filter/v2alpha/dns_filter.pb.h"
-#include "envoy/config/filter/udp/dns_filter/v2alpha/dns_filter.pb.validate.h"
+#include "envoy/extensions/filter/udp/dns_filter/v3alpha/dns_filter.pb.h"
+#include "envoy/extensions/filter/udp/dns_filter/v3alpha/dns_filter.pb.validate.h"
 
 #include "common/common/logger.h"
 
@@ -54,12 +54,13 @@ public:
   ~DnsFilterTest() { EXPECT_CALL(callbacks_.udp_listener_, onDestroy()); }
 
   void setup(const std::string& yaml) {
-    envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig config;
+    envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig config;
     TestUtility::loadFromYamlAndValidate(yaml, config);
     auto store = stats_store_.createScope("dns_scope");
     EXPECT_CALL(listener_factory_, scope()).WillOnce(ReturnRef(*store));
     EXPECT_CALL(listener_factory_, dispatcher()).Times(AtLeast(0));
     EXPECT_CALL(listener_factory_, clusterManager()).Times(AtLeast(0));
+    EXPECT_CALL(listener_factory_, api()).Times(AtLeast(0));
 
     resolver_ = std::make_shared<Network::MockDnsResolver>();
     EXPECT_CALL(dispatcher_, createDnsResolver(_, _)).WillOnce(Return(resolver_));
@@ -161,7 +162,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(0, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(0, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
@@ -180,7 +181,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -212,7 +213,7 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     response_parser_.reset();
     ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-    ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+    ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
     ASSERT_EQ(1, response_parser_.getAnswers());
     ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -242,7 +243,7 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
 
   ASSERT_TRUE(response_parser_.parseDnsObject(response_ptr));
 
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 }
@@ -262,7 +263,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
 
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(expected.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -304,7 +305,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   // parse the result
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(1, response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -349,7 +350,7 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
   response_parser_.parseDnsObject(response_ptr);
 
   ASSERT_LT(response_ptr->length(), Utils::MAX_UDP_DNS_SIZE);
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(expected_address.size(), response_parser_.getAnswers());
   ASSERT_EQ(0, response_parser_.getQueryResponseCode());
 
@@ -390,7 +391,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   // parse the result
   response_parser_.parseDnsObject(response_ptr);
 
-  ASSERT_EQ(1, Utils::getResponseQuerySize(response_parser_));
+  ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
 

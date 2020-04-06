@@ -11,31 +11,31 @@ namespace Utils {
 std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
 
   Runtime::RandomGeneratorImpl random_;
-  DnsHeaderStruct query{};
+  struct DnsHeader query{};
   uint16_t id = random_.random() & 0xFFFF;
 
   // Generate a random query ID
   query.id = id;
 
   // Signify that this is a query
-  query.f.flags.qr = 0;
+  query.flags.qr = 0;
 
   // This should usually be zero
-  query.f.flags.opcode = 0;
+  query.flags.opcode = 0;
 
-  query.f.flags.aa = 0;
-  query.f.flags.tc = 0;
+  query.flags.aa = 0;
+  query.flags.tc = 0;
 
   // Set Recursion flags (at least one bit set so that the flags are not all zero)
-  query.f.flags.rd = 1;
-  query.f.flags.ra = 0;
+  query.flags.rd = 1;
+  query.flags.ra = 0;
 
   // reserved flag is not set
-  query.f.flags.z = 0;
+  query.flags.z = 0;
 
   // Set the authenticated flags to zero
-  query.f.flags.ad = 0;
-  query.f.flags.cd = 0;
+  query.flags.ad = 0;
+  query.flags.cd = 0;
 
   query.questions = 1;
   query.answers = 0;
@@ -44,15 +44,19 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
 
   Buffer::OwnedImpl buffer_;
   buffer_.writeBEInt<uint16_t>(query.id);
-  buffer_.writeBEInt<uint16_t>(query.f.val);
+
+  uint16_t flags;
+  ::memcpy(&flags, static_cast<void*>(&query.flags), sizeof(uint16_t));
+  buffer_.writeBEInt<uint16_t>(flags);
+
   buffer_.writeBEInt<uint16_t>(query.questions);
   buffer_.writeBEInt<uint16_t>(query.answers);
   buffer_.writeBEInt<uint16_t>(query.authority_rrs);
   buffer_.writeBEInt<uint16_t>(query.additional_rrs);
 
-  DnsQueryRecordPtr query_ptr = std::make_unique<DnsQueryRecord>(id, name, rec_type, rec_class);
+  DnsQueryRecord query_rec(id, name, rec_type, rec_class);
 
-  buffer_.add(query_ptr->serialize());
+  query_rec.serialize(buffer_);
 
   return buffer_.toString();
 }
@@ -73,7 +77,7 @@ void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecor
   ASSERT_TRUE(iter != addresses.end());
 }
 
-size_t getResponseQuerySize(DnsMessageParser& parser) {
+size_t getResponseQueryCount(DnsMessageParser& parser) {
   const uint16_t id = parser.getCurrentQueryId();
   const auto& queries = parser.getActiveQueryRecords();
 

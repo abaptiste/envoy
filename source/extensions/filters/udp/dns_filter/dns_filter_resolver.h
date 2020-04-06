@@ -25,13 +25,13 @@ enum class DnsFilterResolverStatus { Pending, Complete, TimedOut };
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilterResolver(AnswerCallback& callback, AddressConstPtrVec resolvers,
-                    std::chrono::milliseconds& timeout, Event::Dispatcher& dispatcher)
+                    std::chrono::milliseconds timeout, Event::Dispatcher& dispatcher)
       : resolver_(dispatcher.createDnsResolver(resolvers, false /* use tcp for lookups */)),
         callback_(callback), timeout_(timeout),
         resolver_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
         active_query_(nullptr) {}
 
-  virtual ~DnsFilterResolver(){};
+  ~DnsFilterResolver() = default;
 
   /**
    * @brief entry point to resolve the name in a DnsQueryRecord
@@ -42,7 +42,7 @@ public:
    *
    * @param domain_query the query record object containing the name for which we are resolving
    */
-  virtual void resolve_query(const DnsQueryRecordPtr& domain_query);
+  void resolve_query(const DnsQueryRecordPtr& domain_query);
 
 private:
   /**
