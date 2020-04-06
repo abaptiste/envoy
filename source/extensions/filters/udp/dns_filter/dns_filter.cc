@@ -19,7 +19,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
   const auto& server_config = config.server_config();
 
-  // TODO: Read the external DataSource
+  // TODO(abaptiste): Read the external DataSource
   if (server_config.has_inline_dns_table()) {
 
     const auto& dns_table = server_config.inline_dns_table();
@@ -34,7 +34,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
         addrs.reserve(address_list.size());
         // This will throw an exception if the configured_address string is malformed
         for (const auto& configured_address : address_list) {
-          const auto ipaddr = Network::Utility::parseInternetAddress(configured_address, 0, true);
+          const auto ipaddr = Network::Utility::parseInternetAddress(
+              configured_address, 0 /* port */, true /* v6only */);
           addrs.push_back(ipaddr);
         }
       }
@@ -47,8 +48,10 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
 
     // Add known domains
+    known_suffixes_.reserve(dns_table.known_suffixes().size());
     for (const auto& suffix : dns_table.known_suffixes()) {
-      // TODO: We support only suffixes here. Expand this to support other StringMatcher types
+      // TODO(abaptiste): We support only suffixes here. Expand this to support other StringMatcher
+      // types
       envoy::type::matcher::v3::StringMatcher matcher;
       matcher.set_suffix(suffix.suffix());
       auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(matcher);
@@ -62,7 +65,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     const auto& upstream_resolvers = client_config.upstream_resolvers();
     resolvers_.reserve(upstream_resolvers.size());
     for (const auto& resolver : upstream_resolvers) {
-      const auto ipaddr = Network::Utility::parseInternetAddress(resolver, 0, true);
+      auto ipaddr =
+          Network::Utility::parseInternetAddress(resolver, 0 /* port */, true /* v6only */);
       resolvers_.push_back(std::move(ipaddr));
     }
   }
@@ -146,7 +150,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
       }
     }
 
-    // TODO: External resolution
+    // TODO(abaptiste): External resolution
   }
 
   if (message_parser_->queriesUnanswered(id)) {
@@ -181,7 +185,7 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
     return false;
   }
 
-  // TODO: Use a trie to find a match instead of iterating through the list
+  // TODO(abaptiste): Use a trie to find a match instead of iterating through the list
   for (auto& suffix : known_suffixes) {
     if (suffix->match(domain_name)) {
       return true;
@@ -195,7 +199,7 @@ bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecord& query) {
 
   const auto& domains = config_->domains();
 
-  // TODO: If we have a large ( > 100) domain list, use a binary search.
+  // TODO(abaptiste): If we have a large ( > 100) domain list, use a binary search.
   const auto iter = domains.find(query.name_);
   if (iter == domains.end()) {
     ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query.name_);

@@ -49,12 +49,12 @@ public:
       const envoy::config::filter::udp::dns_filter::v2alpha::DnsFilterConfig& config);
 
   DnsFilterStats& stats() const { return stats_; }
-  DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
-  std::list<Matchers::StringMatcherPtr>& knownSuffixes() const { return known_suffixes_; }
-  absl::flat_hash_map<std::string, uint64_t>& domainTtl() const { return domain_ttl_; }
-  AddressConstPtrVec& resolvers() const { return resolvers_; }
+  const DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
+  const std::vector<Matchers::StringMatcherPtr>& knownSuffixes() const { return known_suffixes_; }
+  const absl::flat_hash_map<std::string, uint64_t>& domainTtl() const { return domain_ttl_; }
+  const AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forwardQueries() const { return forward_queries_; }
-  std::chrono::milliseconds& resolverTimeout() const { return resolver_timeout_ms_; }
+  const std::chrono::milliseconds resolverTimeout() const { return resolver_timeout_ms_; }
 
   static constexpr uint64_t DefaultResolverTimeoutMs = 500;
   static constexpr uint64_t DefaultResolverTTLs = 300;
@@ -68,12 +68,12 @@ private:
   Stats::Scope& root_scope_;
 
   mutable DnsFilterStats stats_;
-  mutable DnsVirtualDomainConfig virtual_domains_;
-  mutable std::list<Matchers::StringMatcherPtr> known_suffixes_;
-  mutable absl::flat_hash_map<std::string, uint64_t> domain_ttl_;
+  DnsVirtualDomainConfig virtual_domains_;
+  std::vector<Matchers::StringMatcherPtr> known_suffixes_;
+  absl::flat_hash_map<std::string, uint64_t> domain_ttl_;
   bool forward_queries_;
-  mutable AddressConstPtrVec resolvers_;
-  mutable std::chrono::milliseconds resolver_timeout_ms_;
+  AddressConstPtrVec resolvers_;
+  std::chrono::milliseconds resolver_timeout_ms_;
 };
 
 using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
@@ -104,7 +104,7 @@ private:
   /**
    * Prepare the response buffer and send it to the client
    */
-  virtual void sendDnsResponse();
+  void sendDnsResponse();
 
   /**
    * @brief Encapsulates all of the logic required to find an answer for a DNS query
@@ -112,7 +112,7 @@ private:
    * @return DnsLookupResponseCode indicating whether we were able to respond to the query or send
    * the query to an external resolver
    */
-  virtual DnsLookupResponseCode getResponseForQuery();
+  DnsLookupResponseCode getResponseForQuery();
 
   /**
    * @return uint32_t retrieves the configured per domain TTL to be inserted into answer records

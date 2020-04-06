@@ -28,13 +28,11 @@ PACKED_STRUCT(struct DnsHeaderFlags {
 
 /**
  * Structure representing the DNS header as it appears in a packet
+ * See https://www.ietf.org/rfc/rfc1035.txt for more details
  */
 PACKED_STRUCT(struct DnsHeader {
   uint16_t id;
-  union {
-    uint16_t val;
-    struct DnsHeaderFlags flags;
-  } f;
+  struct DnsHeaderFlags flags;
   uint16_t questions;
   uint16_t answers;
   uint16_t authority_rrs;
@@ -55,8 +53,8 @@ public:
       : id_(id), name_(rec_name), type_(rec_type), class_(rec_class){};
 
   virtual ~BaseDnsRecord() = default;
-  virtual void serializeName();
-  virtual Buffer::OwnedImpl& serialize() PURE;
+  void serializeName();
+  virtual void serialize(Buffer::OwnedImpl& output) PURE;
 
   const uint16_t id_;
   const std::string name_;
@@ -79,7 +77,7 @@ public:
       : BaseDnsRecord(id, rec_name, rec_type, rec_class) {}
 
   ~DnsQueryRecord() override = default;
-  Buffer::OwnedImpl& serialize() override;
+  void serialize(Buffer::OwnedImpl& output) override;
 };
 
 using DnsQueryRecordPtr = std::shared_ptr<DnsQueryRecord>;
@@ -101,7 +99,7 @@ public:
       : BaseDnsRecord(id, query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
   ~DnsAnswerRecord() override = default;
-  Buffer::OwnedImpl& serialize() override;
+  void serialize(Buffer::OwnedImpl& output) override;
 
   const uint32_t ttl_;
   Network::Address::InstanceConstSharedPtr ip_addr_;
@@ -112,32 +110,32 @@ using DnsAnswerMap = absl::flat_hash_map<std::string, std::list<DnsAnswerRecordP
 
 enum class DnsQueryParseState {
   Init = 0,
-  TransactionId, // 2 bytes
-  Flags,         // 2 bytes
-  Questions,     // 2 bytes
-  Answers,       // 2 bytes
-  Authority,     // 2 bytes
-  Authority2,    // 2 bytes
+  Flags,      // 2 bytes
+  Questions,  // 2 bytes
+  Answers,    // 2 bytes
+  Authority,  // 2 bytes
+  Authority2, // 2 bytes
   Finish
 };
 
-class DnsMessageParser;
-
 /**
- * This class operates on a DNS record. It contains all functions to parse and store Query and
- * Answer records.
+ * This class orchestrates parsing a DNS query and building the response to be sent to a client.
  */
-class DnsObject {
+class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 
 public:
-  DnsObject() = default;
-  virtual ~DnsObject() = default;
+  DnsMessageParser() = default;
+  ~DnsMessageParser() = default;
+
+  DnsAnswerRecordPtr getResponseForQuery();
+  void buildResponseBuffer(Buffer::OwnedImpl& buffer);
+  uint64_t queriesUnanswered(const uint16_t id);
 
   /**
    * @param buffer a reference to the incoming request object received by the listener
    * @return bool true if all DNS records and flags were successfully parsed from the buffer
    */
-  virtual bool parseDnsObject(const Buffer::InstancePtr& buffer);
+  bool parseDnsObject(const Buffer::InstancePtr& buffer);
 
   /**
    * @brief parse a single query record from a client request
@@ -148,7 +146,7 @@ public:
    * @return DnsQueryRecordPtr a pointer to a DnsQueryRecord object containing all query data parsed
    * from the buffer
    */
-  virtual DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
+  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
                                                 uint64_t* offset);
 
   /**
@@ -160,7 +158,7 @@ public:
    * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
    * parsed from the buffer
    */
-  virtual DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
+  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
                                                   uint64_t* offset);
 
   /**
@@ -171,53 +169,49 @@ public:
    * @param ttl the TTL specifying how long the returned answer is cached
    * @param ipaddr the address that is returned in the answer record
    */
-  virtual void buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
+  void buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
                                     Network::Address::InstanceConstSharedPtr ipaddr);
 
   /**
    * @return a reference to a list of queries parsed from a client request
    */
-  virtual const DnsQueryMap& getActiveQueryRecords() { return queries_; }
+  const DnsQueryMap& getActiveQueryRecords() { return queries_; }
 
   /**
    * @return the current query transaction ID being handled
    */
-  virtual uint16_t getCurrentQueryId() const { return active_transactions_.front(); }
+  uint16_t getCurrentQueryId() const { return active_transactions_.front(); }
 
   /**
    * @return a reference to a map associating the query name to the list of answers
    */
-  virtual const DnsAnswerMap& getAnswerRecords() { return answers_; }
+  const DnsAnswerMap& getAnswerRecords() { return answers_; }
 
   /**
    * @return uint16_t the response code flag value from a parsed dns object
    */
-  virtual uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.f.flags.rcode); }
+  uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.flags.rcode); }
 
   /**
    * @return uint16_t the number of answer records in the parsed dns object
    */
-  virtual uint16_t getAnswers() { return incoming_.answers; }
+  uint16_t getAnswers() { return incoming_.answers; }
 
   /**
    * @return uint16_t the response code flag value from a generated dns object
    */
-  virtual uint16_t getAnswerResponseCode() {
-    return static_cast<uint16_t>(generated_.f.flags.rcode);
-  }
+  uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
 
   /**
    * Reset the internal state of the class.
    */
-  virtual void reset() {
+  void reset() {
     active_transactions_.clear();
     queries_.clear();
     answers_.clear();
   }
 
 private:
-  friend class DnsMessageParser;
-
   const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
                                        uint64_t* name_offset);
 
@@ -235,27 +229,6 @@ private:
    */
   void storeQueryRecord(DnsQueryRecordPtr rec);
 
-  struct DnsHeader incoming_;
-  struct DnsHeader generated_;
-  std::deque<uint16_t> active_transactions_;
-
-  DnsQueryMap queries_;
-  DnsAnswerMap answers_;
-};
-
-/**
- * This class orchestrates parsing a DNS query and building the response to be sent to a client.
- */
-class DnsMessageParser : public DnsObject, Logger::Loggable<Logger::Id::filter> {
-public:
-  DnsMessageParser() = default;
-  ~DnsMessageParser() override = default;
-
-  DnsAnswerRecordPtr getResponseForQuery();
-  void buildResponseBuffer(Buffer::OwnedImpl& buffer);
-  uint64_t queriesUnanswered(const uint16_t id);
-
-private:
   /**
    * @brief sets the flags in the DNS header of the response sent to a client
    *
@@ -263,6 +236,13 @@ private:
    * @param answers specify the number of answer records contained in the response
    */
   void setDnsResponseFlags(const uint16_t questions, const uint16_t answers);
+
+  struct DnsHeader incoming_;
+  struct DnsHeader generated_;
+  std::deque<uint16_t> active_transactions_;
+
+  DnsQueryMap queries_;
+  DnsAnswerMap answers_;
 };
 
 using DnsMessageParserPtr = std::unique_ptr<DnsMessageParser>;
