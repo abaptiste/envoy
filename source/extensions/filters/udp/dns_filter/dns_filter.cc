@@ -87,8 +87,8 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
     return;
   }
 
-  // Resolve the requested name
-  auto response = getResponseForQuery();
+  // TODO(abaptiste): Resolve the requested name
+  DnsLookupResponseCode response = DnsLookupResponseCode::Failure;
 
   // We were not able to satisfy the request locally. Return an
   // empty response to the client
@@ -112,117 +112,10 @@ void DnsFilter::sendDnsResponse() {
   // Clear any cruft in the outgoing buffer
   response_.drain(response_.length());
 
-  // This serializes the generated response to the parse query from the client. If there is a
-  // parsing error or the incoming query is invalid, we will still generate a valid DNS response
-  message_parser_->buildResponseBuffer(response_);
+  // TODO(abaptiste): serialize and return a response to the client
 
   Network::UdpSendData response_data{local_->ip(), *peer_, response_};
   listener_.send(response_data);
-}
-
-DnsLookupResponseCode DnsFilter::getResponseForQuery() {
-
-  auto& query_map = message_parser_->getActiveQueryRecords();
-
-  // It appears to be a rare case where we would have more than one query in a single request.
-  // It is allowed by the protocol but not widely supported:
-  //
-  // https://stackoverflow.com/a/4083071
-
-  const uint16_t id = message_parser_->getCurrentQueryId();
-  const auto& query_iter = query_map.find(id);
-
-  if (query_iter == query_map.end()) {
-    ENVOY_LOG_MISC(error, "Unable to find queries for the current transaction id: {}", id);
-  }
-
-  // The number of queries will almost always be one. This governed by the 'questions' field in
-  // the flags. Since the protocol allows for more than one query, we will handle this case.
-  for (const auto& query : query_iter->second) {
-
-    // Try to resolve the query locally. If forwarding the query externally is disabled we will
-    // always attempt to resolve with the configured domains
-    if (isKnownDomain(query->name_) || !config_->forwardQueries()) {
-
-      // Determine whether we an answer this query with the static configuration
-      if (resolveViaConfiguredHosts(*query)) {
-        continue;
-      }
-    }
-
-    // TODO(abaptiste): External resolution
-  }
-
-  if (message_parser_->queriesUnanswered(id)) {
-    return DnsLookupResponseCode::Failure;
-  }
-  return DnsLookupResponseCode::Success;
-}
-
-uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
-  uint32_t ttl;
-
-  const auto& domain_ttl_config = config_->domainTtl();
-  const auto& iter = domain_ttl_config.find(domain);
-
-  if (iter == domain_ttl_config.end()) {
-    ttl = static_cast<uint32_t>(DnsFilterEnvoyConfig::DefaultResolverTTLs);
-  } else {
-    ttl = static_cast<uint32_t>(iter->second);
-  }
-
-  return ttl;
-}
-
-bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
-
-  const auto& known_suffixes = config_->knownSuffixes();
-
-  // If we don't have a list of whitelisted domain suffixes, we will resolve the name with an
-  // external DNS server
-  if (known_suffixes.empty()) {
-    ENVOY_LOG(trace, "Known domains list is empty");
-    return false;
-  }
-
-  // TODO(abaptiste): Use a trie to find a match instead of iterating through the list
-  for (auto& suffix : known_suffixes) {
-    if (suffix->match(domain_name)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecord& query) {
-
-  const auto& domains = config_->domains();
-
-  // TODO(abaptiste): If we have a large ( > 100) domain list, use a binary search.
-  const auto iter = domains.find(query.name_);
-  if (iter == domains.end()) {
-    ENVOY_LOG(debug, "Domain [{}] is not a configured entry", query.name_);
-    return false;
-  }
-
-  const auto& configured_address_list = iter->second;
-  if (configured_address_list.empty()) {
-    ENVOY_LOG(debug, "Domain [{}] address list is empty", query.name_);
-    return false;
-  }
-
-  // Build an answer record from each configured IP address
-  uint64_t hosts_found = 0;
-  for (const auto& configured_address : configured_address_list) {
-    ASSERT(configured_address != nullptr);
-    ENVOY_LOG(debug, "using address {} for domain [{}]",
-              configured_address->ip()->addressAsString(), query.name_);
-    ++hosts_found;
-    const uint32_t ttl = getDomainTTL(query.name_);
-    message_parser_->buildDnsAnswerRecord(query, ttl, configured_address);
-  }
-  return (hosts_found > 0);
 }
 
 void DnsFilter::onReceiveError(Api::IoError::IoErrorCode) {

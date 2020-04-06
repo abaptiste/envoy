@@ -66,7 +66,7 @@ void DnsQueryRecord::serialize(Buffer::OwnedImpl& output) {
   buffer_.writeBEInt<uint16_t>(type_);
   buffer_.writeBEInt<uint16_t>(class_);
 
-  output.move(buffer_);
+  output.add(buffer_);
 }
 
 // Serialize a DNS Answer Record
@@ -93,7 +93,7 @@ void DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
     buffer_.writeLEInt<uint32_t>(ip_address->ipv4()->address());
   }
 
-  output.move(buffer_);
+  output.add(buffer_);
 }
 
 bool DnsMessageParser::parseDnsObject(const Buffer::InstancePtr& buffer) {
@@ -407,175 +407,6 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   return rec;
 }
 
-void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint16_t answers) {
-
-  // Copy the transaction ID
-  generated_.id = incoming_.id;
-
-  // Signify that this is a response to a query
-  generated_.flags.qr = 1;
-
-  generated_.flags.opcode = incoming_.flags.opcode;
-
-  generated_.flags.aa = 0;
-  generated_.flags.tc = 0;
-
-  // Copy Recursion flags
-  generated_.flags.rd = incoming_.flags.rd;
-
-  // TODO(abaptiste): This should be predicated on whether the user enables external lookups
-  generated_.flags.ra = 0;
-
-  // reserved flag is not set
-  generated_.flags.z = 0;
-
-  // Set the authenticated flags to zero
-  generated_.flags.ad = 0;
-
-  generated_.flags.cd = 0;
-
-  generated_.answers = answers;
-
-  // The ID must be non-zero so that we can associate the response with the query
-  if (incoming_.id == 0) {
-    generated_.flags.rcode = DnsResponseCode::FormatError;
-  } else {
-    generated_.flags.rcode = answers == 0 ? DnsResponseCode::NameError : DnsResponseCode::NoError;
-  }
-
-  // Set the number of questions we are responding to
-  generated_.questions = questions;
-
-  // We will not include any additional records
-  generated_.authority_rrs = 0;
-  generated_.additional_rrs = 0;
-}
-
-void DnsMessageParser::buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
-                                            Network::Address::InstanceConstSharedPtr ipaddr) {
-
-  // Verify that we have an address matching the query record type
-  switch (query_rec.type_) {
-  case DnsRecordType::AAAA:
-    if (ipaddr->ip()->ipv6() == nullptr) {
-      ENVOY_LOG(error, "Unable to return IPV6 address for query");
-      return;
-    }
-    break;
-
-  case DnsRecordType::A:
-    if (ipaddr->ip()->ipv4() == nullptr) {
-      ENVOY_LOG(error, "Unable to return IPV4 address for query");
-      return;
-    }
-    break;
-
-  default:
-    ENVOY_LOG(error, "record type [{}] not supported", query_rec.type_);
-    return;
-  }
-
-  // The answer record could contain types other than IP's. We will support only IP addresses for
-  // the moment
-  auto answer_record = std::make_unique<DnsAnswerRecord>(
-      query_rec.id_, query_rec.name_, query_rec.type_, query_rec.class_, ttl, std::move(ipaddr));
-
-  storeAnswerRecord(std::move(answer_record));
-}
-
-void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
-
-  // Ensure that responses stay below the 512 byte byte limit. If we are to exceed this we must add
-  // DNS extension fields
-  //
-  // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes. If we support
-  // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
-  // mind.
-  static constexpr uint64_t max_dns_response_size{512};
-
-  // Each response must have DNS flags, which take 4 bytes. Account for them immediately so that we
-  // can adjust the number of returned answers to remain under the limit
-  uint64_t total_buffer_size = 4;
-  uint16_t serialized_answers = 0;
-  uint16_t serialized_queries = 0;
-
-  Buffer::OwnedImpl query_buffer{};
-  Buffer::OwnedImpl answer_buffer{};
-
-  if (!active_transactions_.empty()) {
-
-    // Determine and de-queue the ID of the query to which we are responding
-    const uint16_t id = active_transactions_.front();
-    active_transactions_.pop_front();
-
-    // Get the queries associated with this ID
-    const auto& query_iter = queries_.find(id);
-
-    if (query_iter != queries_.end()) {
-      for (const auto& query : query_iter->second) {
-
-        // Serialize and remove the query from our list
-        ++serialized_queries;
-        query->serialize(query_buffer);
-        total_buffer_size += query_buffer.length();
-
-        // Find the answer record list corresponding to this query
-        const auto& answer_list = answers_.find(query->name_);
-        if (answer_list == answers_.end()) {
-          continue;
-        }
-
-        // Serialize each answer record and stop before we exceed 512 bytes
-        auto& answers = answer_list->second;
-        auto answer = answers.begin();
-        while (answer != answers.end()) {
-
-          // It is possible that we may have different transactions looking for the same domain ID.
-          // Only serialize answers with the same transaction ID
-          if ((*answer)->id_ == id) {
-            Buffer::OwnedImpl serialized_answer;
-            (*answer)->serialize(serialized_answer);
-            const uint64_t serialized_answer_length = serialized_answer.length();
-
-            if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
-              break;
-            }
-
-            ++serialized_answers;
-            total_buffer_size += serialized_answer_length;
-            answer_buffer.add(serialized_answer);
-            answer = answers.erase(answer);
-            continue;
-          }
-          ++answer;
-        }
-
-        // If all answers for this domain matched the current ID, the answer_list will now be empty
-        // and can be purged.
-        if (answer_list->second.empty()) {
-          answers_.erase(answer_list);
-        }
-      }
-    }
-  }
-
-  // Build the response buffer for transmission to the client
-  setDnsResponseFlags(serialized_queries, serialized_answers);
-
-  buffer.writeBEInt<uint16_t>(generated_.id);
-  uint16_t flags;
-  ::memcpy(&flags, static_cast<void*>(&generated_.flags), sizeof(uint16_t));
-  buffer.writeBEInt<uint16_t>(flags);
-  buffer.writeBEInt<uint16_t>(generated_.questions);
-  buffer.writeBEInt<uint16_t>(generated_.answers);
-  buffer.writeBEInt<uint16_t>(generated_.authority_rrs);
-  buffer.writeBEInt<uint16_t>(generated_.additional_rrs);
-
-  // write the queries and answers
-  buffer.move(query_buffer);
-  buffer.move(answer_buffer);
-}
-
 void DnsMessageParser::storeQueryRecord(DnsQueryRecordPtr rec) {
 
   const uint16_t id = rec->id_;
@@ -604,34 +435,6 @@ void DnsMessageParser::storeAnswerRecord(DnsAnswerRecordPtr rec) {
   } else {
     answer_iter->second.push_back(std::move(rec));
   }
-}
-
-uint64_t DnsMessageParser::queriesUnanswered(const uint16_t id) {
-
-  const auto querylist = queries_.find(id);
-
-  // This shouldn't be the case since this function is called before serialization. We should have
-  // a query matching the ID, and from the query we can determine whether there are answers for it.
-  ASSERT(querylist != queries_.end());
-
-  for (const auto& query : querylist->second) {
-    const auto& answers = answers_.find(query->name_);
-
-    // There are no answers corresponding to this query's name.
-    if (answers == answers_.end()) {
-      break;
-    }
-
-    // We found an answer record matching the query ID
-    for (const auto& answer : answers->second) {
-      if (answer->id_ == id) {
-        return false;
-      }
-    }
-  }
-
-  // proceed with another method of resolution
-  return true;
 }
 
 } // namespace DnsFilter

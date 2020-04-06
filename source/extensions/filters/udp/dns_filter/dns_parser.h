@@ -127,10 +127,6 @@ public:
   DnsMessageParser() = default;
   ~DnsMessageParser() = default;
 
-  DnsAnswerRecordPtr getResponseForQuery();
-  void buildResponseBuffer(Buffer::OwnedImpl& buffer);
-  uint64_t queriesUnanswered(const uint16_t id);
-
   /**
    * @param buffer a reference to the incoming request object received by the listener
    * @return bool true if all DNS records and flags were successfully parsed from the buffer
@@ -160,17 +156,6 @@ public:
   DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
 
   /**
-   * @brief Constructs a DNS Answer record for a given IP Address and stores the object in a map
-   * where the response is associated with query name
-   *
-   * @param query_record to which the answer is matched.
-   * @param ttl the TTL specifying how long the returned answer is cached
-   * @param ipaddr the address that is returned in the answer record
-   */
-  void buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
-                            Network::Address::InstanceConstSharedPtr ipaddr);
-
-  /**
    * @return a reference to a list of queries parsed from a client request
    */
   const DnsQueryMap& getActiveQueryRecords() { return queries_; }
@@ -181,24 +166,9 @@ public:
   uint16_t getCurrentQueryId() const { return active_transactions_.front(); }
 
   /**
-   * @return a reference to a map associating the query name to the list of answers
-   */
-  const DnsAnswerMap& getAnswerRecords() { return answers_; }
-
-  /**
    * @return uint16_t the response code flag value from a parsed dns object
    */
   uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.flags.rcode); }
-
-  /**
-   * @return uint16_t the number of answer records in the parsed dns object
-   */
-  uint16_t getAnswers() { return incoming_.answers; }
-
-  /**
-   * @return uint16_t the response code flag value from a generated dns object
-   */
-  uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
 
   /**
    * Reset the internal state of the class.
@@ -206,19 +176,11 @@ public:
   void reset() {
     active_transactions_.clear();
     queries_.clear();
-    answers_.clear();
   }
 
 private:
   const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
                                        uint64_t* name_offset);
-
-  /**
-   * @brief updates a map associating a query with a list of DnsAnswerRecord pointers
-   *
-   * @param rec the answer record that is to be added to the answer list
-   */
-  void storeAnswerRecord(DnsAnswerRecordPtr rec);
 
   /**
    * @brief updates a map associating a query id with a list of DnsQueryRecord pointers
@@ -228,15 +190,13 @@ private:
   void storeQueryRecord(DnsQueryRecordPtr rec);
 
   /**
-   * @brief sets the flags in the DNS header of the response sent to a client
+   * @brief updates a map associating a query with a list of DnsAnswerRecord pointers
    *
-   * @param queries specify the number of query records contained in the response
-   * @param answers specify the number of answer records contained in the response
+   * @param rec the answer record that is to be added to the answer list
    */
-  void setDnsResponseFlags(const uint16_t questions, const uint16_t answers);
+  void storeAnswerRecord(DnsAnswerRecordPtr rec);
 
   struct DnsHeader incoming_;
-  struct DnsHeader generated_;
   std::deque<uint16_t> active_transactions_;
 
   DnsQueryMap queries_;

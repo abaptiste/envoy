@@ -63,23 +63,7 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
   return buffer_.toString();
 }
 
-void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecordPtr& answer) {
-
-  ASSERT_TRUE(answer != nullptr);
-  ASSERT_TRUE(answer->ip_addr_ != nullptr);
-
-  const auto resolved_address = answer->ip_addr_->ip()->addressAsString();
-  if (addresses.size() == 1) {
-    const auto expected = addresses.begin();
-    ASSERT_EQ(*expected, resolved_address);
-    return;
-  }
-
-  const auto iter = std::find(addresses.begin(), addresses.end(), resolved_address);
-  ASSERT_TRUE(iter != addresses.end());
-}
-
-size_t getResponseQuerySize(DnsMessageParser& parser) {
+size_t getResponseQueryCount(DnsMessageParser& parser) {
   const uint16_t id = parser.getCurrentQueryId();
   const auto& queries = parser.getActiveQueryRecords();
 
