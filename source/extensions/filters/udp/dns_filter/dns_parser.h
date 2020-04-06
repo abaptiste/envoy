@@ -146,8 +146,7 @@ public:
    * @return DnsQueryRecordPtr a pointer to a DnsQueryRecord object containing all query data parsed
    * from the buffer
    */
-  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
-                                                uint64_t* offset);
+  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
 
   /**
    * @brief parse a single answer record from a client request
@@ -158,8 +157,7 @@ public:
    * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
    * parsed from the buffer
    */
-  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
-                                                  uint64_t* offset);
+  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
 
   /**
    * @brief Constructs a DNS Answer record for a given IP Address and stores the object in a map
@@ -170,7 +168,7 @@ public:
    * @param ipaddr the address that is returned in the answer record
    */
   void buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
-                                    Network::Address::InstanceConstSharedPtr ipaddr);
+                            Network::Address::InstanceConstSharedPtr ipaddr);
 
   /**
    * @return a reference to a list of queries parsed from a client request
