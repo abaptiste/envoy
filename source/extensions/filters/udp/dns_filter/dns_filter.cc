@@ -88,22 +88,8 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   }
 
   // TODO(abaptiste): Resolve the requested name
-  DnsLookupResponseCode response = DnsLookupResponseCode::Failure;
 
-  // We were not able to satisfy the request locally. Return an
-  // empty response to the client
-  if (response == DnsLookupResponseCode::Failure) {
-    sendDnsResponse();
-    return;
-  }
-
-  // Externally resolved. We'll respond to the client when the
-  // external DNS resolution callback returns
-  if (response == DnsLookupResponseCode::External) {
-    return;
-  }
-
-  // We have an answer. Send it to the client
+  // Send an answer to the client
   sendDnsResponse();
 }
 

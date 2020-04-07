@@ -85,10 +85,10 @@ public:
   // This config has external resolution disabled and is used to verify local lookups. With
   // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
   // each test.
-  const std::string forward_query_off_config = R"EOF(
+  const std::string forward_query_on_config = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
-  forward_query: false
+  forward_query: true
   upstream_resolvers:
   - "1.1.1.1"
   - "8.8.8.8"
@@ -119,33 +119,12 @@ server_config:
           address:
           - 10.0.3.1
   )EOF";
-
-  // This config has external resolution enabled. Each test must setup the mock to save and execute
-  // the resolver callback
-  const std::string forward_query_on_config = R"EOF(
-stat_prefix: "my_prefix"
-client_config:
-  forward_query: true
-  upstream_resolvers:
-    - "1.1.1.1"
-    - "8.8.8.8"
-    - "8.8.4.4"
-server_config:
-  inline_dns_table:
-    external_retry_count: 3
-    virtual_domains:
-      - name: "www.foo1.com"
-        endpoint:
-          address_list:
-            address:
-              - 10.0.0.1
-  )EOF";
 };
 
 TEST_F(DnsFilterTest, InvalidQuery) {
   InSequence s;
 
-  setup(forward_query_off_config);
+  setup(forward_query_on_config);
 
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
@@ -155,7 +134,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 TEST_F(DnsFilterTest, SingleTypeAQuery) {
   InSequence s;
 
-  setup(forward_query_off_config);
+  setup(forward_query_on_config);
 
   const std::string domain("www.foo3.com");
   const std::string query =

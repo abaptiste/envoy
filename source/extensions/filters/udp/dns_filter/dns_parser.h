@@ -99,7 +99,7 @@ public:
       : BaseDnsRecord(id, query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
   ~DnsAnswerRecord() override = default;
-  void serialize(Buffer::OwnedImpl& output) override;
+  void serialize(Buffer::OwnedImpl& output) override { UNREFERENCED_PARAMETER(output); }
 
   const uint32_t ttl_;
   Network::Address::InstanceConstSharedPtr ip_addr_;
@@ -145,17 +145,6 @@ public:
   DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
 
   /**
-   * @brief parse a single answer record from a client request
-   *
-   * @param buffer a reference to a buffer containing a DNS response
-   * @param offset the buffer offset at which parsing is to begin. This parameter is updated when
-   * one record is parsed from the buffer and returned to the caller.
-   * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
-   * parsed from the buffer
-   */
-  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
-
-  /**
    * @return a reference to a list of queries parsed from a client request
    */
   const DnsQueryMap& getActiveQueryRecords() { return queries_; }
@@ -189,18 +178,10 @@ private:
    */
   void storeQueryRecord(DnsQueryRecordPtr rec);
 
-  /**
-   * @brief updates a map associating a query with a list of DnsAnswerRecord pointers
-   *
-   * @param rec the answer record that is to be added to the answer list
-   */
-  void storeAnswerRecord(DnsAnswerRecordPtr rec);
-
   struct DnsHeader incoming_;
   std::deque<uint16_t> active_transactions_;
 
   DnsQueryMap queries_;
-  DnsAnswerMap answers_;
 };
 
 using DnsMessageParserPtr = std::unique_ptr<DnsMessageParser>;
