@@ -128,13 +128,15 @@ enum class DnsQueryParseState {
   Finish
 };
 
-class DnsMessageParser;
-
 /**
  * This class orchestrates parsing a DNS query and building the response to be sent to a client.
  */
 class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 public:
+  // DnsMessageParser(const DnsFilterEnvoyConfigSharedPtr config) : config_(config) {}
+  DnsMessageParser() = default;
+  ~DnsMessageParser() = default;
+
   // TODO: Do not include this in the PR
   void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
                   const uint64_t offset = 0);
@@ -209,7 +211,7 @@ public:
   /**
    * @return the current query transaction ID being handled
    */
-  uint16_t getCurrentQueryId() const { return active_transactions_.front(); }
+  uint16_t getCurrentQueryId() { return active_transactions_.front(); }
 
   /**
    * @return a reference to a map associating the query name to the list of answers
@@ -230,6 +232,8 @@ public:
    * @return uint16_t the response code flag value from a generated dns object
    */
   uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
+
+  size_t getActiveTransactionCount() const { return active_transactions_.size(); }
 
   /**
    * Reset the internal state of the class.
@@ -273,6 +277,8 @@ private:
    * @param rec the answer record that is to be added to the answer list
    */
   void storeQueryRecord(DnsQueryRecordPtr rec);
+
+  // const DnsFilterEnvoyConfigSharedPtr config_;
 
   struct DnsHeader incoming_;
   struct DnsHeader generated_;

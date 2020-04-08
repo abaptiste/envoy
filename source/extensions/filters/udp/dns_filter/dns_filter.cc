@@ -23,7 +23,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
   envoy::data::dns::v3::DnsTable dns_table;
   bool result = loadServerConfig(server_config, dns_table);
-  ENVOY_LOG_MISC(trace, "Loading table from external file: {}", result ? "Success" : "Failed");
+  ENVOY_LOG_MISC(debug, "Loading DNS table from external file: {}", result ? "Success" : "Failure");
 
   const size_t entries = dns_table.virtual_domains().size();
 
@@ -35,9 +35,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       const auto& address_list = virtual_domain.endpoint().address_list().address();
       addrs.reserve(address_list.size());
       // This will throw an exception if the configured_address string is malformed
-      for (const auto& configured_address : address_list) {
-        auto ipaddr = Network::Utility::parseInternetAddress(configured_address, 0 /* port */,
-                                                             true /* v6only */);
+      for (const auto& address : address_list) {
+        auto ipaddr =
+            Network::Utility::parseInternetAddress(address, 0 /* port */, true /* v6only */);
         addrs.push_back(std::move(ipaddr));
       }
     }
@@ -53,8 +53,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   known_suffixes_.reserve(dns_table.known_suffixes().size());
   for (const auto& suffix : dns_table.known_suffixes()) {
     // TODO: We support only suffixes here. Expand this to support other StringMatcher types
-    // envoy::type::matcher::v3::StringMatcher matcher;
-    // matcher.set_suffix(suffix.suffix());
     auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(suffix);
     known_suffixes_.push_back(std::move(matcher_ptr));
   }
@@ -90,28 +88,28 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
   const auto& datasource = config.external_dns_table();
   const auto external_dns_table = Config::DataSource::read(datasource, false, api_);
   if (!external_dns_table.empty()) {
-    ENVOY_LOG_MISC(trace, "Loading table from external file: {}. {} bytes", datasource.filename(),
-                   external_dns_table.size());
-    // return table.ParseFromString(external_dns_table);
+    ENVOY_LOG_MISC(debug, "Loading DNS table from external file: {}. {} bytes",
+                   datasource.filename(), external_dns_table.size());
     return Protobuf::TextFormat::ParseFromString(external_dns_table, &table);
   }
 
-  return false;
+  // The config requires one table to be configured. We should not reach here
+  NOT_REACHED_GCOVR_EXCL_LINE;
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
-      message_parser_(std::make_unique<DnsMessageParser>())
-
-{
+      message_parser_(std::make_unique<DnsMessageParser>()) {
   // TODO retries
 
   // This callback is executed when the dns resolution completes. At that time
   // we build an answer record from each IP resolved, then send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
+    incrementExternalQueryTypeCount(query->type_);
     for (const auto& ip : iplist) {
+      incrementExternalQueryTypeAnswerCount(query->type_);
       uint16_t ttl = getDomainTTL(query->name_);
       message_parser_->buildDnsAnswerRecord(*query, ttl, std::move(ip));
     }
@@ -128,8 +126,12 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   local_ = client_request.addresses_.local_;
   peer_ = client_request.addresses_.peer_;
 
+  config_->stats().downstream_rx_bytes_.recordValue(client_request.buffer_->length());
+  config_->stats().downstream_rx_queries_.inc();
+
   // Parse the query, if it fails return an response to the client
   if (!message_parser_->parseDnsObject(client_request.buffer_)) {
+    config_->stats().downstream_rx_invalid_queries_.inc();
     sendDnsResponse();
     return;
   }
@@ -163,6 +165,10 @@ void DnsFilter::sendDnsResponse() {
   // parsing error or the incoming query is invalid, we will still generate a valid DNS response
   message_parser_->buildResponseBuffer(response_);
 
+  config_->stats().downstream_active_queries_.set(message_parser_->getActiveTransactionCount());
+  config_->stats().downstream_tx_responses_.inc();
+  config_->stats().downstream_tx_bytes_.recordValue(response_.length());
+
   Network::UdpSendData response_data{local_->ip(), *peer_, response_};
   listener_.send(response_data);
 }
@@ -171,11 +177,14 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 
   auto& query_map = message_parser_->getActiveQueryRecords();
 
-  // It appears to be a rare case where we would have more than one query in a single request.
-  // It is allowed by the protocol but not widely supported:
-  //
-  // https://stackoverflow.com/a/4083071
-
+  /* It appears to be a rare case where we would have more than one query in a single request.
+   * It is allowed by the protocol but not widely supported:
+   *
+   * See: https://www.ietf.org/rfc/rfc1035.txt
+   * The question section is used to carry the "question" in most queries,
+   * i.e., the parameters that define what is being asked.  The section
+   * contains QDCOUNT (usually 1) entries.
+   */
   const uint16_t id = message_parser_->getCurrentQueryId();
   const auto& query_iter = query_map.find(id);
 
@@ -187,27 +196,33 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
   // the flags. Since the protocol allows for more than one query, we will handle this case.
   for (const auto& query : query_iter->second) {
 
+    incrementQueryTypeCount(query->type_);
+
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forwardQueries()) {
 
       // Determine whether the name is a cluster. Move on to the next query if successful
       if (resolveViaClusters(*query)) {
+        incrementClusterQueryTypeAnswerCount(query->type_);
         continue;
       }
 
       // Determine whether we an answer this query with the static configuration
       if (resolveViaConfiguredHosts(*query)) {
+        incrementLocalQueryTypeAnswerCount(query->type_);
         continue;
       }
     }
 
     ENVOY_LOG(debug, "resolving name [{}] via external resolvers", query->name_);
     resolver_->resolve_query(query);
+
     return DnsLookupResponseCode::External;
   }
 
   if (message_parser_->queriesUnanswered(id)) {
+    config_->stats().unanswered_queries_.inc();
     return DnsLookupResponseCode::Failure;
   }
   return DnsLookupResponseCode::Success;
@@ -242,6 +257,7 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
   // TODO: Use a trie to find a match instead of iterating through the list
   for (auto& suffix : known_suffixes) {
     if (suffix->match(domain_name)) {
+      config_->stats().known_domain_queries_.inc();
       return true;
     }
   }
@@ -298,11 +314,11 @@ bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecord& query) {
     const uint32_t ttl = getDomainTTL(query.name_);
     message_parser_->buildDnsAnswerRecord(query, ttl, configured_address);
   }
-  return (hosts_found > 0);
+  return (hosts_found != 0);
 }
 
 void DnsFilter::onReceiveError(Api::IoError::IoErrorCode) {
-  // config_->stats().downstream_sess_rx_errors_.inc();
+  config_->stats().downstream_rx_errors_.inc();
 }
 
 } // namespace DnsFilter

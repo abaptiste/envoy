@@ -23,19 +23,42 @@ namespace DnsFilter {
  * All Dns Filter stats. @see stats_macros.h
  * Track the number of answered and un-answered queries for A and AAAA records
  */
-#define ALL_DNS_FILTER_STATS(COUNTER)                                                              \
-  COUNTER(queries_a_record)                                                                        \
-  COUNTER(noanswers_a_record)                                                                      \
-  COUNTER(answers_a_record)                                                                        \
-  COUNTER(queries_aaaa_record)                                                                     \
-  COUNTER(noanswers_aaaa_record)                                                                   \
-  COUNTER(answers_aaaa_record)
+#define ALL_DNS_FILTER_STATS(COUNTER, GAUGE, HISTOGRAM)                                            \
+  COUNTER(a_record_queries)                                                                        \
+  COUNTER(aaaa_record_queries)                                                                     \
+  COUNTER(cluster_a_record_answers)                                                                \
+  COUNTER(cluster_aaaa_record_answers)                                                             \
+  COUNTER(cluster_unsupported_answers)                                                             \
+  COUNTER(downstream_rx_errors)                                                                    \
+  COUNTER(downstream_rx_invalid_queries)                                                           \
+  COUNTER(downstream_rx_queries)                                                                   \
+  COUNTER(downstream_tx_external_answer)                                                           \
+  COUNTER(downstream_tx_local_answer)                                                              \
+  COUNTER(downstream_tx_no_answer)                                                                 \
+  COUNTER(downstream_tx_responses)                                                                 \
+  COUNTER(external_a_record_answers)                                                               \
+  COUNTER(external_a_record_queries)                                                               \
+  COUNTER(external_aaaa_record_answers)                                                            \
+  COUNTER(external_aaaa_record_queries)                                                            \
+  COUNTER(external_unsupported_answers)                                                            \
+  COUNTER(external_unsupported_queries)                                                            \
+  COUNTER(externally_resolved_queries)                                                             \
+  COUNTER(known_domain_queries)                                                                    \
+  COUNTER(local_a_record_answers)                                                                  \
+  COUNTER(local_aaaa_record_answers)                                                               \
+  COUNTER(local_unsupported_answers)                                                               \
+  COUNTER(unanswered_queries)                                                                      \
+  COUNTER(unsupported_answers)                                                                     \
+  COUNTER(unsupported_queries)                                                                     \
+  GAUGE(downstream_active_queries, Accumulate)                                                     \
+  HISTOGRAM(downstream_rx_bytes, Bytes)                                                            \
+  HISTOGRAM(downstream_tx_bytes, Bytes)
 
 /**
  * Struct definition for all Dns Filter stats. @see stats_macros.h
  */
 struct DnsFilterStats {
-  ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT)
+  ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT, GENERATE_GAUGE_STRUCT, GENERATE_HISTOGRAM_STRUCT)
 };
 
 using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrVec>;
@@ -64,7 +87,9 @@ public:
 private:
   static DnsFilterStats generateStats(const std::string& stat_prefix, Stats::Scope& scope) {
     const auto final_prefix = absl::StrCat("dns_filter.", stat_prefix);
-    return {ALL_DNS_FILTER_STATS(POOL_COUNTER_PREFIX(scope, final_prefix))};
+    return {ALL_DNS_FILTER_STATS(POOL_COUNTER_PREFIX(scope, final_prefix),
+                                 POOL_GAUGE_PREFIX(scope, final_prefix),
+                                 POOL_HISTOGRAM_PREFIX(scope, final_prefix))};
   }
 
   bool loadServerConfig(const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig::
@@ -128,19 +153,118 @@ private:
   uint32_t getDomainTTL(const absl::string_view domain);
 
   /**
-   * Resolves the supplied query from configured clusters
+   * @brief Resolves the supplied query from configured clusters
+   *
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matched a cluster and an answer record was constructed
    */
   bool resolveViaClusters(const DnsQueryRecord& query);
 
   /**
-   * Resolves the supplied query from configured hosts
+   * @brief Resolves the supplied query from configured hosts
+   *
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matches a configured domain and answer records can be
    * constructed
    */
   bool resolveViaConfiguredHosts(const DnsQueryRecord& query);
+
+  /**
+   * @brief Increment the counter for the given query type for external queries
+   *
+   * @param query_type indicate the type of record being resolved (A, AAAA, or other).
+   */
+  void incrementExternalQueryTypeCount(const uint16_t query_type) {
+    switch (query_type) {
+    case DnsRecordType::A:
+      config_->stats().external_a_record_queries_.inc();
+      break;
+    case DnsRecordType::AAAA:
+      config_->stats().external_aaaa_record_queries_.inc();
+      break;
+    default:
+      config_->stats().external_unsupported_queries_.inc();
+      break;
+    }
+  }
+
+  /**
+   * @brief Increment the counter for the given query type.
+   *
+   * @param query_type indicate the type of record being resolved (A, AAAA, or other).
+   */
+  void incrementQueryTypeCount(const uint16_t query_type) {
+    switch (query_type) {
+    case DnsRecordType::A:
+      config_->stats().a_record_queries_.inc();
+      break;
+    case DnsRecordType::AAAA:
+      config_->stats().aaaa_record_queries_.inc();
+      break;
+    default:
+      config_->stats().unsupported_queries_.inc();
+      break;
+    }
+  }
+
+  /**
+   * @brief Increment the counter for answers for the given query type resolved via cluster names
+   *
+   * @param query_type indicate the type of answer record returned to the client
+   */
+  void incrementClusterQueryTypeAnswerCount(const uint16_t query_type) {
+    switch (query_type) {
+    case DnsRecordType::A:
+      config_->stats().cluster_a_record_answers_.inc();
+      break;
+    case DnsRecordType::AAAA:
+      config_->stats().cluster_aaaa_record_answers_.inc();
+      break;
+    default:
+      config_->stats().cluster_unsupported_answers_.inc();
+      break;
+    }
+  }
+
+  /**
+   * @brief Increment the counter for answers for the given query type resolved from the local
+   * configuration.
+   *
+   * @param query_type indicate the type of answer record returned to the client
+   */
+  void incrementLocalQueryTypeAnswerCount(const uint16_t query_type) {
+    switch (query_type) {
+    case DnsRecordType::A:
+      config_->stats().local_a_record_answers_.inc();
+      break;
+    case DnsRecordType::AAAA:
+      config_->stats().local_aaaa_record_answers_.inc();
+      break;
+    default:
+      config_->stats().local_unsupported_answers_.inc();
+      break;
+    }
+  }
+
+  /**
+   * @brief Increment the counter for answers for the given query type resolved via an external
+   * resolver
+   *
+   * @param query_type indicate the type of answer record returned to the client
+   */
+  void incrementExternalQueryTypeAnswerCount(const uint16_t query_type) {
+    switch (query_type) {
+    case DnsRecordType::A:
+      config_->stats().external_a_record_answers_.inc();
+      break;
+    case DnsRecordType::AAAA:
+      config_->stats().external_aaaa_record_answers_.inc();
+      break;
+    default:
+      config_->stats().external_unsupported_answers_.inc();
+      break;
+    }
+  }
 
   const DnsFilterEnvoyConfigSharedPtr config_;
   Network::UdpListener& listener_;

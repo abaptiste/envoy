@@ -110,6 +110,7 @@ server_config:
     known_suffixes:
     - suffix: foo1.com
     - suffix: foo2.com
+    - suffix: foo3.com
     virtual_domains:
     - name: "www.foo1.com"
       endpoint:
@@ -151,6 +152,7 @@ server_config:
             address:
               - 10.0.0.1
   )EOF";
+  // TODO(abbaptis): External data source config
 };
 
 TEST_F(DnsFilterTest, InvalidQuery) {
@@ -165,6 +167,12 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   ASSERT_EQ(0, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
+
+  // Validate stats
+  ASSERT_EQ(0, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+  ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
+  ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
 }
 
 TEST_F(DnsFilterTest, SingleTypeAQuery) {
@@ -195,6 +203,13 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   // Verify the address returned
   const std::list<std::string> expected{"10.0.3.1"};
   Utils::verifyAddress(expected, answer);
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
+  ASSERT_EQ(1, config_->stats().local_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  // ASSERT_EQ(query.size(), config_->stats().downstream_rx_bytes_.value());
 }
 
 TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
@@ -203,10 +218,13 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
   setup(forward_query_off_config);
 
   const std::string domain("www.foo3.com");
+  const size_t count = 5;
+  size_t total_query_bytes = 0;
 
-  for (size_t i = 0; i < 5; i++) {
+  for (size_t i = 0; i < count; i++) {
     const std::string query =
         Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+    total_query_bytes += query.size();
     ASSERT_FALSE(query.empty());
     sendQueryFromClient("10.0.0.1:1000", query);
 
@@ -228,6 +246,14 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     std::list<std::string> expected{"10.0.3.1"};
     Utils::verifyAddress(expected, answer);
   }
+
+  // Validate stats
+  ASSERT_EQ(count, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(count, config_->stats().known_domain_queries_.value());
+  ASSERT_EQ(count, config_->stats().local_a_record_answers_.value());
+  ASSERT_EQ(count, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
+  // ASSERT_EQ(total_query_bytes, config_->stats().downstream_rx_bytes_.value());
 }
 
 TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
@@ -246,6 +272,15 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
+  ASSERT_EQ(1, config_->stats().local_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().unanswered_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
+  // ASSERT_EQ(query.size(), config_->stats().downstream_rx_bytes_.value());
 }
 
 TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
@@ -276,6 +311,13 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
 
   // Verify the address returned
   Utils::verifyAddress(expected, answer);
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
+  ASSERT_EQ(1, config_->stats().local_aaaa_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().aaaa_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 }
 
 TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
@@ -317,6 +359,15 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
 
   std::list<std::string> expected{expected_address};
   Utils::verifyAddress(expected, answer);
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().external_a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().external_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
@@ -362,6 +413,15 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
     Utils::verifyAddress(expected_address, answer);
   }
 
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().external_a_record_queries_.value());
+  ASSERT_EQ(expected_address.size(), config_->stats().external_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
+
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
 
@@ -394,6 +454,15 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   ASSERT_EQ(1, Utils::getResponseQueryCount(response_parser_));
   ASSERT_EQ(0, response_parser_.getAnswers());
   ASSERT_EQ(3, response_parser_.getQueryResponseCode());
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().external_a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().external_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
+  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
