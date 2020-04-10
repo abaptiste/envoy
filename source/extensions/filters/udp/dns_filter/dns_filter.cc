@@ -183,7 +183,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
    *
    * See: https://www.ietf.org/rfc/rfc1035.txt
    * The question section is used to carry the "question" in most queries,
-   * i.e., the parameters that define what is being asked.  The section
+   * i.e., the parameters that define what is being asked. The section
    * contains QDCOUNT (usually 1) entries.
    */
   const uint16_t id = message_parser_->getCurrentQueryId();
