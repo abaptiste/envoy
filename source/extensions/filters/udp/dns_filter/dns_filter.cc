@@ -93,20 +93,21 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
     return Protobuf::TextFormat::ParseFromString(external_dns_table, &table);
   }
 
-  // The config requires one table to be configured. We should not reach here
-  NOT_REACHED_GCOVR_EXCL_LINE;
+  return false;
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
-      message_parser_(std::make_unique<DnsMessageParser>()) {
+      message_parser_(std::make_unique<DnsMessageParser>(
+          listener_.dispatcher().timeSource(), config_->stats().downstream_rx_query_latency_)) {
   // TODO retries
 
   // This callback is executed when the dns resolution completes. At that time
   // we build an answer record from each IP resolved, then send it to the client
   answer_callback_ = [this](DnsQueryRecordPtr& query, AddressConstPtrVec& iplist) -> void {
+    config_->stats().externally_resolved_queries_.inc();
     incrementExternalQueryTypeCount(query->type_);
     for (const auto& ip : iplist) {
       incrementExternalQueryTypeAnswerCount(query->type_);
@@ -186,15 +187,20 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
    * contains QDCOUNT (usually 1) entries.
    */
   const uint16_t id = message_parser_->getCurrentQueryId();
-  const auto& query_iter = query_map.find(id);
 
-  if (query_iter == query_map.end()) {
+  if (query_map.count(id) == 0) {
     ENVOY_LOG_MISC(error, "Unable to find queries for the current transaction id: {}", id);
   }
 
   // The number of queries will almost always be one. This governed by the 'questions' field in
   // the flags. Since the protocol allows for more than one query, we will handle this case.
-  for (const auto& query : query_iter->second) {
+  for (const auto& query_id_pair : query_map) {
+
+    if (query_id_pair.first != id) {
+      continue;
+    }
+
+    const auto& query = query_id_pair.second;
 
     incrementQueryTypeCount(query->type_);
 
@@ -204,13 +210,11 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery() {
 
       // Determine whether the name is a cluster. Move on to the next query if successful
       if (resolveViaClusters(*query)) {
-        incrementClusterQueryTypeAnswerCount(query->type_);
         continue;
       }
 
       // Determine whether we an answer this query with the static configuration
       if (resolveViaConfiguredHosts(*query)) {
-        incrementLocalQueryTypeAnswerCount(query->type_);
         continue;
       }
     }
@@ -281,6 +285,7 @@ bool DnsFilter::resolveViaClusters(const DnsQueryRecord& query) {
       ++discovered_endpoints;
       ENVOY_LOG(debug, "using cluster host address {} for domain [{}]",
                 host->address()->ip()->addressAsString(), query.name_);
+      incrementClusterQueryTypeAnswerCount(query.type_);
       message_parser_->buildDnsAnswerRecord(query, ttl, host->address());
     }
   }
@@ -308,7 +313,8 @@ bool DnsFilter::resolveViaConfiguredHosts(const DnsQueryRecord& query) {
   uint64_t hosts_found = 0;
   for (const auto& configured_address : configured_address_list) {
     ASSERT(configured_address != nullptr);
-    ENVOY_LOG(debug, "using address {} for domain [{}]",
+    incrementLocalQueryTypeAnswerCount(query.type_);
+    ENVOY_LOG(debug, "using local address {} for domain [{}]",
               configured_address->ip()->addressAsString(), query.name_);
     ++hosts_found;
     const uint32_t ttl = getDomainTTL(query.name_);

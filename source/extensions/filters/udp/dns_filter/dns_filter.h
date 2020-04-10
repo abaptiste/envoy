@@ -51,6 +51,7 @@ namespace DnsFilter {
   COUNTER(unsupported_answers)                                                                     \
   COUNTER(unsupported_queries)                                                                     \
   GAUGE(downstream_active_queries, Accumulate)                                                     \
+  HISTOGRAM(downstream_rx_query_latency, Milliseconds)                                             \
   HISTOGRAM(downstream_rx_bytes, Bytes)                                                            \
   HISTOGRAM(downstream_tx_bytes, Bytes)
 

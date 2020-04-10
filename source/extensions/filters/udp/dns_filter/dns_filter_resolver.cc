@@ -9,6 +9,14 @@ namespace DnsFilter {
 
 void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
+  if (active_query_ != nullptr) {
+    active_query_->cancel();
+  }
+
+  query_rec_ = domain_query;
+  resolution_status_ = DnsFilterResolverStatus::Pending;
+  resolver_timer_->disableTimer();
+
   Network::DnsLookupFamily lookup_family;
   switch (domain_query->type_) {
   case DnsRecordType::A:
@@ -25,16 +33,7 @@ void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
 
   ENVOY_LOG(trace, "Resolving name [{}]", domain_query->name_);
 
-  resolution_status_ = DnsFilterResolverStatus::Pending;
-
-  if (active_query_ != nullptr) {
-    active_query_->cancel();
-  }
-
-  query_rec_ = domain_query;
-
   // Re-arm the timeout timer
-  resolver_timer_->disableTimer();
   resolver_timer_->enableTimer(timeout_);
 
   // Resolve the address in the query and add to the resolved_hosts vector

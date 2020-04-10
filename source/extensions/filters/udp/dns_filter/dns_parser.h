@@ -5,18 +5,12 @@
 #include "envoy/network/listener.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/stats/timespan_impl.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
-
-namespace {
-template <typename Enumeration>
-auto as_integer(Enumeration const value) -> typename std::underlying_type<Enumeration>::type {
-  return static_cast<typename std::underlying_type<Enumeration>::type>(value);
-}
-} // namespace
 
 // The flags have been verified with dig and this structure should not be modified. The flag order
 // does not match the RFC, but takes byte ordering into account so that serialization does not need
@@ -63,16 +57,13 @@ public:
       : id_(id), name_(rec_name), type_(rec_type), class_(rec_class) {}
 
   virtual ~BaseDnsRecord() = default;
-  void serializeName();
+  void serializeName(Buffer::OwnedImpl& output);
   virtual void serialize(Buffer::OwnedImpl& output) PURE;
 
   const uint16_t id_;
   const std::string name_;
   const uint16_t type_;
   const uint16_t class_;
-
-protected:
-  Buffer::OwnedImpl buffer_;
 };
 
 /**
@@ -88,10 +79,12 @@ public:
 
   ~DnsQueryRecord() override = default;
   void serialize(Buffer::OwnedImpl& output) override;
+
+  std::unique_ptr<Stats::HistogramCompletableTimespanImpl> query_time_ms_;
 };
 
 using DnsQueryRecordPtr = std::shared_ptr<DnsQueryRecord>;
-using DnsQueryMap = absl::flat_hash_map<uint16_t, std::list<DnsQueryRecordPtr>>;
+using DnsQueryMap = std::unordered_multimap<uint16_t, DnsQueryRecordPtr>;
 
 using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
 using AnswerCallback = std::function<void(DnsQueryRecordPtr& query, AddressConstPtrVec& ipaddr)>;
@@ -116,7 +109,7 @@ public:
 };
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
-using DnsAnswerMap = absl::flat_hash_map<std::string, std::list<DnsAnswerRecordPtr>>;
+using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
 
 enum class DnsQueryParseState {
   Init = 0,
@@ -133,8 +126,8 @@ enum class DnsQueryParseState {
  */
 class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 public:
-  // DnsMessageParser(const DnsFilterEnvoyConfigSharedPtr config) : config_(config) {}
-  DnsMessageParser() = default;
+  DnsMessageParser(TimeSource& timesource, Stats::Histogram& latency_histogram)
+      : timesource_(timesource), query_latency_histogram_(latency_histogram) {}
   ~DnsMessageParser() = default;
 
   // TODO: Do not include this in the PR
@@ -264,21 +257,8 @@ private:
   const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
                                        uint64_t* name_offset);
 
-  /**
-   * @brief updates the map associating a query with a list of DnsAnswerRecord pointers
-   *
-   * @param rec the answer record that is to be added to the answer list
-   */
-  void storeAnswerRecord(DnsAnswerRecordPtr rec);
-
-  /**
-   * @brief updates the map associating a query id with a list of DnsQueryRecord pointers
-   *
-   * @param rec the answer record that is to be added to the answer list
-   */
-  void storeQueryRecord(DnsQueryRecordPtr rec);
-
-  // const DnsFilterEnvoyConfigSharedPtr config_;
+  TimeSource& timesource_;
+  Stats::Histogram& query_latency_histogram_;
 
   struct DnsHeader incoming_;
   struct DnsHeader generated_;
