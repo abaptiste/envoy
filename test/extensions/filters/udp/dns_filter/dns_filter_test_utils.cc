@@ -54,7 +54,7 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
   buffer_.writeBEInt<uint16_t>(query.authority_rrs);
   buffer_.writeBEInt<uint16_t>(query.additional_rrs);
 
-  DnsQueryRecord query_rec(id, name, rec_type, rec_class);
+  DnsQueryRecord query_rec(name, rec_type, rec_class);
 
   query_rec.serialize(buffer_);
 
@@ -77,12 +77,14 @@ void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecor
   ASSERT_TRUE(iter != addresses.end());
 }
 
+#if 0
 size_t getResponseQueryCount(DnsMessageParser& parser) {
   const uint16_t id = parser.getCurrentQueryId();
   const auto& queries = parser.getActiveQueryRecords();
 
   return queries.count(id);
 }
+#endif
 
 } // namespace Utils
 } // namespace DnsFilter

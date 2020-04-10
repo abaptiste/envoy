@@ -7,13 +7,20 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(const DnsQueryRecordPtr& domain_query) {
+void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
+                                      const DnsQueryRecordPtr& domain_query) {
 
   if (active_query_ != nullptr) {
     active_query_->cancel();
+    active_query_ = nullptr;
   }
 
-  query_rec_ = domain_query;
+  // Since the context can have more than one query, we need to maintain a pointer to the current
+  // query that is being resolved.  Since domain_query is a unique pointer to a record in the
+  // context, we use a standard pointer to reference the query data when building the response
+  external_context_ = std::move(context);
+  query_rec_ = domain_query.get();
+
   resolution_status_ = DnsFilterResolverStatus::Pending;
   resolver_timer_->disableTimer();
 

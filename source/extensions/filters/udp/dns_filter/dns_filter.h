@@ -138,7 +138,7 @@ private:
   /**
    * Prepare the response buffer and send it to the client
    */
-  void sendDnsResponse();
+  void sendDnsResponse(DnsQueryContextPtr context);
 
   /**
    * @brief Encapsulates all of the logic required to find an answer for a DNS query
@@ -146,7 +146,7 @@ private:
    * @return DnsLookupResponseCode indicating whether we were able to respond to the query or send
    * the query to an external resolver
    */
-  DnsLookupResponseCode getResponseForQuery();
+  DnsLookupResponseCode getResponseForQuery(DnsQueryContextPtr& context);
 
   /**
    * @return uint32_t retrieves the configured per domain TTL to be inserted into answer records
@@ -159,7 +159,7 @@ private:
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matched a cluster and an answer record was constructed
    */
-  bool resolveViaClusters(const DnsQueryRecord& query);
+  bool resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRecord& query);
 
   /**
    * @brief Resolves the supplied query from configured hosts
@@ -168,7 +168,7 @@ private:
    * @return bool true if the requested name matches a configured domain and answer records can be
    * constructed
    */
-  bool resolveViaConfiguredHosts(const DnsQueryRecord& query);
+  bool resolveViaConfiguredHosts(DnsQueryContextPtr& context, const DnsQueryRecord& query);
 
   /**
    * @brief Increment the counter for the given query type for external queries
@@ -277,7 +277,7 @@ private:
 
   Network::Address::InstanceConstSharedPtr local_;
   Network::Address::InstanceConstSharedPtr peer_;
-  Buffer::OwnedImpl response_;
+  //Buffer::OwnedImpl response_;
 
   AnswerCallback answer_callback_;
 };

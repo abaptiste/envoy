@@ -125,6 +125,7 @@ static_resources:
   Api::ApiPtr api_;
   NiceMock<Stats::MockHistogram> histogram_;
   std::unique_ptr<DnsMessageParser> response_parser_;
+  DnsQueryContextPtr query_ctx_;
 };
 
 INSTANTIATE_TEST_SUITE_P(IpVersions, DnsFilterIntegrationTest,
@@ -133,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(IpVersions, DnsFilterIntegrationTest,
 
 // Basic External Lookup test.
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
-  setup(0);
+  setup();
   const uint32_t port = lookupPort("listener_0");
   const auto listener_address = Network::Utility::resolveUrl(
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
@@ -144,10 +145,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
       Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response.buffer_));
+  query_ctx_ = response_parser_->createQueryContext(response);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_GE(1, response_parser_->getAnswers());
+  ASSERT_EQ(1, query_ctx_->answers_.size());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
 }
 
@@ -163,10 +164,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
       Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response.buffer_));
+  query_ctx_ = response_parser_->createQueryContext(response);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_GE(1, response_parser_->getAnswers());
+  ASSERT_EQ(1, query_ctx_->answers_.size());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
 }
 
@@ -182,10 +183,10 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
       Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response.buffer_));
+  query_ctx_ = response_parser_->createQueryContext(response);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(2, response_parser_->getAnswers());
+  ASSERT_EQ(2, query_ctx_->answers_.size());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
 }
 
@@ -207,10 +208,10 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
       "cluster_0", record_type, Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response.buffer_));
+  query_ctx_ = response_parser_->createQueryContext(response);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(2, response_parser_->getAnswers());
+  ASSERT_EQ(2, query_ctx_->answers_.size());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
 }
 

@@ -42,7 +42,7 @@ public:
    *
    * @param domain_query the query record object containing the name for which we are resolving
    */
-  void resolve_query(const DnsQueryRecordPtr& domain_query);
+  void resolve_query(DnsQueryContextPtr context, const DnsQueryRecordPtr& domain_query);
 
 private:
   /**
@@ -55,7 +55,7 @@ private:
       return;
     }
     resolver_timer_->disableTimer();
-    callback_(query_rec_, resolved_hosts_);
+    callback_(std::move(external_context_), query_rec_, resolved_hosts_);
   }
 
   /**
@@ -70,7 +70,7 @@ private:
     }
     resolution_status_ = DnsFilterResolverStatus::TimedOut;
     resolved_hosts_.clear();
-    callback_(query_rec_, resolved_hosts_);
+    callback_(std::move(external_context_), query_rec_, resolved_hosts_);
   }
 
   const Network::DnsResolverSharedPtr resolver_;
@@ -79,12 +79,14 @@ private:
   std::chrono::milliseconds timeout_;
   Event::TimerPtr resolver_timer_;
 
-  DnsQueryRecordPtr query_rec_;
+  DnsQueryRecord* query_rec_;
   Network::ActiveDnsQuery* active_query_;
 
   Runtime::RandomGeneratorImpl rng_;
   DnsFilterResolverStatus resolution_status_;
   AddressConstPtrVec resolved_hosts_;
+
+  DnsQueryContextPtr external_context_;
 };
 
 using DnsFilterResolverPtr = std::unique_ptr<DnsFilterResolver>;

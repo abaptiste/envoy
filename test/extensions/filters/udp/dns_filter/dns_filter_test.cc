@@ -41,14 +41,17 @@ public:
     // Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
     Logger::Registry::setLogLevel(spdlog::level::trace);
 
+    client_request_.addresses_.local_ = listener_address_;
+    client_request_.addresses_.peer_ = listener_address_;
+    client_request_.buffer_ = std::make_unique<Buffer::OwnedImpl>();
+
     setupResponseParser();
     EXPECT_CALL(callbacks_, udpListener()).Times(AtLeast(0));
     EXPECT_CALL(callbacks_.udp_listener_, send(_))
         .WillRepeatedly(
             Invoke([this](const Network::UdpSendData& send_data) -> Api::IoCallUint64Result {
-              response_ptr = std::make_unique<Buffer::OwnedImpl>();
-              response_ptr->move(send_data.buffer_);
-              return makeNoError(response_ptr->length());
+              client_request_.buffer_->move(send_data.buffer_);
+              return makeNoError(client_request_.buffer_->length());
             }));
 
     EXPECT_CALL(callbacks_.udp_listener_, dispatcher()).WillRepeatedly(ReturnRef(dispatcher_));
@@ -94,7 +97,7 @@ public:
   std::unique_ptr<DnsFilter> filter_;
   Network::MockUdpReadFilterCallbacks callbacks_;
   Stats::IsolatedStoreImpl stats_store_;
-  Buffer::InstancePtr response_ptr;
+  Network::UdpRecvData client_request_;
   Runtime::RandomGeneratorImpl rng_;
 
   Api::ApiPtr api_;
@@ -104,6 +107,8 @@ public:
 
   Event::MockDispatcher dispatcher_;
   std::shared_ptr<Network::MockDnsResolver> resolver_;
+
+  DnsQueryContextPtr query_ctx_;
 
   // This config has external resolution disabled and is used to verify local lookups. With
   // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
@@ -203,11 +208,11 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response_ptr));
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(0, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(0, response_parser_->getAnswers());
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
 
   // Validate stats
   ASSERT_EQ(0, config_->stats().a_record_queries_.value());
@@ -228,17 +233,15 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response_ptr));
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(1, response_parser_->getAnswers());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(1, query_ctx_->answers_.size());
 
   // Verify that we have an answer record for the queried domain
-  const auto& answers = response_parser_->getAnswerRecords();
-  ASSERT_EQ(1, answers.count(domain));
 
-  const DnsAnswerRecordPtr& answer = answers.find(domain)->second;
+  const DnsAnswerRecordPtr& answer = query_ctx_->answers_.find(domain)->second;
 
   // Verify the address returned
   const std::list<std::string> expected{"10.0.3.1"};
@@ -268,18 +271,14 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     ASSERT_FALSE(query.empty());
     sendQueryFromClient("10.0.0.1:1000", query);
 
-    response_parser_->reset();
-    ASSERT_TRUE(response_parser_->parseDnsObject(response_ptr));
+    query_ctx_ = response_parser_->createQueryContext(client_request_);
+    ASSERT_TRUE(query_ctx_->status_);
 
-    ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-    ASSERT_EQ(1, response_parser_->getAnswers());
     ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+    ASSERT_EQ(1, query_ctx_->answers_.size());
 
     // Verify that we have an answer record for the queried domain
-    const auto& answers = response_parser_->getAnswerRecords();
-    ASSERT_EQ(1, answers.count(domain));
-
-    const DnsAnswerRecordPtr& answer = answers.find(domain)->second;
+    const DnsAnswerRecordPtr& answer = query_ctx_->answers_.find(domain)->second;
 
     // Verify the address returned
     std::list<std::string> expected{"10.0.3.1"};
@@ -305,12 +304,11 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response_ptr));
-
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(0, response_parser_->getAnswers());
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
 
   // Validate stats
   ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
@@ -334,16 +332,15 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  response_parser_->parseDnsObject(response_ptr);
-
-  // Verify that we have an answer record for the queried domain
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
-  const auto& answers = response_parser_->getAnswerRecords();
-  ASSERT_EQ(expected.size(), answers.count(domain));
+  ASSERT_EQ(expected.size(), query_ctx_->answers_.size());
 
   // Verify the address returned
-  for (const auto& answer : answers) {
+  for (const auto& answer : query_ctx_->answers_) {
+    ASSERT_EQ(answer.first, domain);
     Utils::verifyAddress(expected, answer.second);
   }
 
@@ -380,18 +377,17 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
              TestUtility::makeDnsResponse({expected_address}));
 
   // parse the result
-  response_parser_->parseDnsObject(response_ptr);
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(1, response_parser_->getAnswers());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
-
-  const auto& answers = response_parser_->getAnswerRecords();
-  ASSERT_EQ(1, answers.count(domain));
-  const DnsAnswerRecordPtr& answer = answers.find(domain)->second;
+  ASSERT_EQ(1, query_ctx_->answers_.size());
 
   std::list<std::string> expected{expected_address};
-  Utils::verifyAddress(expected, answer);
+  for (const auto& answer : query_ctx_->answers_) {
+    ASSERT_EQ(answer.first, domain);
+    Utils::verifyAddress(expected, answer.second);
+  }
 
   // Validate stats
   ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
@@ -431,17 +427,16 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
              TestUtility::makeDnsResponse({expected_address}));
 
   // parse the result
-  response_parser_->parseDnsObject(response_ptr);
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_LT(response_ptr->length(), Utils::MAX_UDP_DNS_SIZE);
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(expected_address.size(), response_parser_->getAnswers());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(expected_address.size(), query_ctx_->answers_.size());
 
-  const auto& answers = response_parser_->getAnswerRecords();
-  ASSERT_EQ(expected_address.size(), answers.count(domain));
+  ASSERT_LT(client_request_.buffer_->length(), Utils::MAX_UDP_DNS_SIZE);
 
-  for (const auto& answer : answers) {
+  for (const auto& answer : query_ctx_->answers_) {
+    ASSERT_EQ(answer.first, domain);
     Utils::verifyAddress(expected_address, answer.second);
   }
 
@@ -481,11 +476,11 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   resolve_cb(Network::DnsResolver::ResolutionStatus::Success, TestUtility::makeDnsResponse({}));
 
   // parse the result
-  response_parser_->parseDnsObject(response_ptr);
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(0, response_parser_->getAnswers());
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
 
   // Validate stats
   ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
@@ -515,19 +510,17 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  ASSERT_TRUE(response_parser_->parseDnsObject(response_ptr));
+  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  ASSERT_TRUE(query_ctx_->status_);
 
-  ASSERT_EQ(1, Utils::getResponseQueryCount(*response_parser_));
-  ASSERT_EQ(2, response_parser_->getAnswers());
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(2, query_ctx_->answers_.size());
 
-  // Verify that we have an answer record for the queried domain
-  const auto& answers = response_parser_->getAnswerRecords();
-  ASSERT_EQ(2, answers.count(domain));
 
   // Verify the address returned
   const std::list<std::string> expected{"10.0.0.1", "10.0.0.2"};
-  for (const auto& answer : answers) {
+  for (const auto& answer : query_ctx_->answers_) {
+    ASSERT_EQ(answer.first, domain);
     Utils::verifyAddress(expected, answer.second);
   }
 

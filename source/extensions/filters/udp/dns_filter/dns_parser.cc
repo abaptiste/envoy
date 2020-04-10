@@ -139,7 +139,21 @@ void DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
   }
 }
 
-bool DnsMessageParser::parseDnsObject(const Buffer::InstancePtr& buffer) {
+DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& client_request) {
+  DnsQueryContextPtr query_context = std::make_unique<DnsQueryContext>(
+      client_request.addresses_.local_, client_request.addresses_.peer_);
+
+  query_context->status_ = parseDnsObject(query_context, client_request.buffer_);
+
+  if (!query_context->status_) {
+    ENVOY_LOG(error, "Unable to parse buffer into a DNS object");
+  }
+
+  return query_context;
+}
+
+bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
+                                      const Buffer::InstancePtr& buffer) {
 
   auto available_bytes = buffer->length();
 
@@ -220,31 +234,13 @@ bool DnsMessageParser::parseDnsObject(const Buffer::InstancePtr& buffer) {
     return false;
   }
 
-  // Each dns request has a Identification ID. This is used to match the request and replies.
-  // We should not see a duplicate ID when handling DNS requests. The ID is removed from the
-  // active transactions queue when we build a response for the identified query
-  const uint16_t id = static_cast<uint16_t>(incoming_.id);
-  if (std::find(active_transactions_.begin(), active_transactions_.end(), id) !=
-      active_transactions_.end()) {
-    ENVOY_LOG(error, "The filter has already encountered ID {} in a previous request", id);
-    return false;
-  }
-
-  // Double check that this ID is not already being handled.
-  if (queries_.find(id) != queries_.end()) {
-    ENVOY_LOG(
-        error,
-        "There are queries matching ID {} from a previous request for which we have not responded",
-        id);
-    return false;
-  }
-
-  active_transactions_.push_back(id);
+  context->id_ = static_cast<uint16_t>(incoming_.id);
 
   // TODO: Remove before pushing upstream
   dumpFlags(incoming_);
 
-  // Almost always, we will have only one query here
+  // Almost always, we will have only one query here.  Per the RFC, QDCOUNT is usually 1
+  context->queries_.reserve(incoming_.questions);
   for (auto index = 0; index < incoming_.questions; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, incoming_.questions);
     auto rec = parseDnsQueryRecord(buffer, &offset);
@@ -252,10 +248,10 @@ bool DnsMessageParser::parseDnsObject(const Buffer::InstancePtr& buffer) {
       ENVOY_LOG(error, "Couldn't parse query record from buffer");
       return false;
     }
-    queries_.emplace(id, std::move(rec));
+    context->queries_.push_back(std::move(rec));
   }
 
-  // Parse all answer records and store them
+  // Parse all answer records and store them.
   for (auto index = 0; index < incoming_.answers; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, incoming_.answers);
     auto rec = parseDnsAnswerRecord(buffer, &offset);
@@ -264,7 +260,7 @@ bool DnsMessageParser::parseDnsObject(const Buffer::InstancePtr& buffer) {
       return false;
     }
     std::string name = rec->name_;
-    answers_.emplace(name, std::move(rec));
+    context->answers_.emplace(name, std::move(rec));
   }
 
   return true;
@@ -412,7 +408,7 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   *offset = data_offset;
 
-  return std::make_unique<DnsAnswerRecord>(static_cast<uint16_t>(incoming_.id), record_name,
+  return std::make_unique<DnsAnswerRecord>(/*static_cast<uint16_t>(incoming_.id), */ record_name,
                                            record_type, record_class, ttl, std::move(ip_addr));
 }
 
@@ -445,9 +441,7 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   record_class = buffer->peekBEInt<uint16_t>(name_offset);
   name_offset += sizeof(record_class);
 
-  // This is shared because we use the query from a list when building the response.
-  // Using a shared pointer avoids duplicating this data in the asynchronous resolution path
-  auto rec = std::make_shared<DnsQueryRecord>(static_cast<uint16_t>(incoming_.id), record_name,
+  auto rec = std::make_unique<DnsQueryRecord>(/*static_cast<uint16_t>(incoming_.id), */ record_name,
                                               record_type, record_class);
   rec->query_time_ms_ = std::make_unique<Stats::HistogramCompletableTimespanImpl>(
       query_latency_histogram_, timesource_);
@@ -508,7 +502,8 @@ void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint1
   dumpFlags(generated_);
 }
 
-void DnsMessageParser::buildDnsAnswerRecord(const DnsQueryRecord& query_rec, const uint32_t ttl,
+void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
+                                            const DnsQueryRecord& query_rec, const uint32_t ttl,
                                             Network::Address::InstanceConstSharedPtr ipaddr) {
 
   // Verify that we have an address matching the query record type
@@ -535,12 +530,14 @@ void DnsMessageParser::buildDnsAnswerRecord(const DnsQueryRecord& query_rec, con
   // The answer record could contain types other than IP's. We will support only IP addresses for
   // the moment
   auto answer_record = std::make_unique<DnsAnswerRecord>(
-      query_rec.id_, query_rec.name_, query_rec.type_, query_rec.class_, ttl, std::move(ipaddr));
+      /*query_rec.id_, */ query_rec.name_, query_rec.type_, query_rec.class_, ttl,
+      std::move(ipaddr));
 
-  answers_.emplace(query_rec.name_, std::move(answer_record));
+  context->answers_.emplace(query_rec.name_, std::move(answer_record));
 }
 
-void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
+void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
+                                           Buffer::OwnedImpl& buffer) {
 
   // Ensure that responses stay below the 512 byte byte limit. If we are to exceed this we must add
   // DNS extension fields
@@ -559,69 +556,36 @@ void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   Buffer::OwnedImpl query_buffer{};
   Buffer::OwnedImpl answer_buffer{};
 
-  if (!active_transactions_.empty()) {
+  ENVOY_LOG(debug, "Building response for query ID [{}]", query_context->id_);
 
-    // Determine and de-queue the ID of the query to which we are responding
-    const uint16_t id = active_transactions_.front();
-    active_transactions_.pop_front();
+  for (const auto& query : query_context->queries_) {
 
-    ENVOY_LOG(debug, "Building response for query ID [{}]", id);
+    // Serialize and remove the query from our list
+    ++serialized_queries;
+    query->serialize(query_buffer);
+    total_buffer_size += query_buffer.length();
 
-    // Get the queries associated with this ID
-    if (queries_.count(id)) {
-      for (const auto& query_id_pair : queries_) {
+    for (const auto& answer : query_context->answers_) {
 
-        if (query_id_pair.first != id) {
-          continue;
-        }
-
-        const auto& query = query_id_pair.second;
-
-        // Serialize and remove the query from our list
-        ++serialized_queries;
-        query->serialize(query_buffer);
-        total_buffer_size += query_buffer.length();
-
-        const size_t count = answers_.count(query->name_);
-        ENVOY_LOG(debug, "Searching for answers for name [{}]. Answer count [{}]", query->name_,
-                  count);
-
-        // Find the answer record list corresponding to this query
-        if (count == 0) {
-          continue;
-        }
-
-        // Serialize each answer record and stop before we exceed 512 bytes
-        auto answer_name_pair = answers_.begin();
-        while (answer_name_pair != answers_.end()) {
-
-          auto& answer = answer_name_pair->second;
-
-          // It is possible that we may have different transactions looking for the same domain ID.
-          // Only serialize answers with the same transaction ID
-          if (answer->id_ == id) {
-            Buffer::OwnedImpl serialized_answer;
-            answer->serialize(serialized_answer);
-            const uint64_t serialized_answer_length = serialized_answer.length();
-
-            if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
-              break;
-            }
-
-            ++serialized_answers;
-            total_buffer_size += serialized_answer_length;
-            answer_buffer.add(serialized_answer);
-            answer_name_pair = answers_.erase(answer_name_pair);
-            continue;
-          }
-          ++answer_name_pair;
-        }
-
-        query->query_time_ms_->complete();
-        ENVOY_LOG(debug, "Query delay: {}", query->query_time_ms_->elapsed().count());
+      if (answer.first != query->name_) {
+        continue;
       }
+
+      Buffer::OwnedImpl serialized_answer;
+      answer.second->serialize(serialized_answer);
+      const uint64_t serialized_answer_length = serialized_answer.length();
+
+      if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
+        break;
+      }
+
+      ++serialized_answers;
+      total_buffer_size += serialized_answer_length;
+      answer_buffer.add(serialized_answer);
     }
-    queries_.erase(id);
+
+    query->query_time_ms_->complete();
+    ENVOY_LOG(debug, "Query delay: {}", query->query_time_ms_->elapsed().count());
   }
 
   // Build the response buffer for transmission to the client
@@ -641,35 +605,6 @@ void DnsMessageParser::buildResponseBuffer(Buffer::OwnedImpl& buffer) {
   // write the queries and answers
   buffer.move(query_buffer);
   buffer.move(answer_buffer);
-}
-
-uint64_t DnsMessageParser::queriesUnanswered(const uint16_t id) {
-
-  if (queries_.count(id) == 0) {
-    return true;
-  }
-
-  const auto& query = queries_.find(id);
-
-  if (query->first == id) {
-
-    // There are no answers corresponding to this query's name.
-    if (answers_.count(query->second->name_) == 0) {
-      return true;
-    }
-
-    // If there is at least one answer matching the id, we consider the query answered.
-    // There could be queries for the same domain name with different ID's so we have to iterate
-    // through all elements in the multimap
-    for (const auto& answer : answers_) {
-      if (answer.second->id_ == id) {
-        return false;
-      }
-    }
-  }
-
-  // proceed with another method of resolution
-  return true;
 }
 
 } // namespace DnsFilter
