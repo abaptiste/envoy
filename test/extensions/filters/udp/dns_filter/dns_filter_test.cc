@@ -41,17 +41,17 @@ public:
     // Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
     Logger::Registry::setLogLevel(spdlog::level::trace);
 
-    client_request_.addresses_.local_ = listener_address_;
-    client_request_.addresses_.peer_ = listener_address_;
-    client_request_.buffer_ = std::make_unique<Buffer::OwnedImpl>();
+    udp_response_.addresses_.local_ = listener_address_;
+    udp_response_.addresses_.peer_ = listener_address_;
+    udp_response_.buffer_ = std::make_unique<Buffer::OwnedImpl>();
 
     setupResponseParser();
     EXPECT_CALL(callbacks_, udpListener()).Times(AtLeast(0));
     EXPECT_CALL(callbacks_.udp_listener_, send(_))
         .WillRepeatedly(
             Invoke([this](const Network::UdpSendData& send_data) -> Api::IoCallUint64Result {
-              client_request_.buffer_->move(send_data.buffer_);
-              return makeNoError(client_request_.buffer_->length());
+              udp_response_.buffer_->move(send_data.buffer_);
+              return makeNoError(udp_response_.buffer_->length());
             }));
 
     EXPECT_CALL(callbacks_.udp_listener_, dispatcher()).WillRepeatedly(ReturnRef(dispatcher_));
@@ -97,7 +97,7 @@ public:
   std::unique_ptr<DnsFilter> filter_;
   Network::MockUdpReadFilterCallbacks callbacks_;
   Stats::IsolatedStoreImpl stats_store_;
-  Network::UdpRecvData client_request_;
+  Network::UdpRecvData udp_response_;
 
   Api::ApiPtr api_;
   NiceMock<Filesystem::MockInstance> file_system_;
@@ -207,8 +207,8 @@ TEST_F(DnsFilterTest, InvalidQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
   ASSERT_EQ(0, query_ctx_->answers_.size());
@@ -232,7 +232,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
@@ -270,7 +270,7 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     ASSERT_FALSE(query.empty());
     sendQueryFromClient("10.0.0.1:1000", query);
 
-    query_ctx_ = response_parser_->createQueryContext(client_request_);
+    query_ctx_ = response_parser_->createQueryContext(udp_response_);
     ASSERT_TRUE(query_ctx_->parse_status_);
 
     ASSERT_EQ(0, response_parser_->getQueryResponseCode());
@@ -301,7 +301,7 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
@@ -327,7 +327,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
@@ -371,7 +371,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
              TestUtility::makeDnsResponse({expected_address}));
 
   // parse the result
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
@@ -420,13 +420,13 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
              TestUtility::makeDnsResponse({expected_address}));
 
   // parse the result
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(expected_address.size(), query_ctx_->answers_.size());
 
-  ASSERT_LT(client_request_.buffer_->length(), Utils::MAX_UDP_DNS_SIZE);
+  ASSERT_LT(udp_response_.buffer_->length(), Utils::MAX_UDP_DNS_SIZE);
 
   for (const auto& answer : query_ctx_->answers_) {
     ASSERT_EQ(answer.first, domain);
@@ -468,7 +468,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   resolve_cb(Network::DnsResolver::ResolutionStatus::Success, TestUtility::makeDnsResponse({}));
 
   // parse the result
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
@@ -501,7 +501,7 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
-  query_ctx_ = response_parser_->createQueryContext(client_request_);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
@@ -519,6 +519,151 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
   ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
   ASSERT_EQ(2, config_->stats().local_a_record_answers_.value());
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+}
+
+TEST_F(DnsFilterTest, RawBufferTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  const std::string domain("www.foo3.com");
+
+  char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // Query record for
+      0x6f, 0x33, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  const size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
+  ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(1, query_ctx_->answers_.size());
+
+  // Verify that we have an answer record for the queried domain
+  const DnsAnswerRecordPtr& answer = query_ctx_->answers_.find(domain)->second;
+
+  // Verify the address returned
+  std::list<std::string> expected{"10.0.3.1"};
+  Utils::verifyAddress(expected, answer);
+}
+
+TEST_F(DnsFilterTest, InvalidQueryNameTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  // In this buffer the name segment sizes are incorrect.  We should fail parsing
+  char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x02, 0x77, 0x77, 0x77, 0x03, 0x66, 0x6f, // Query record for
+      0x6f, 0x33, 0x01, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  const size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, MultipleQueryCountTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  // In this buffer we have 2 queries for two different domains.  This is a rare case
+  // and serves to validate that we handle the protocol correctly.
+  char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x02,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // begin query record for
+      0x6f, 0x33, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+      0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // Query record for
+      0x6f, 0x31, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo1.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  const size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
+  ASSERT_EQ(0, config_->stats().downstream_rx_invalid_queries_.value());
+  ASSERT_EQ(3, query_ctx_->answers_.size());
+
+  // Verify that the answers contain an entry for each domain
+  for (const auto& answer : query_ctx_->answers_) {
+
+    if (answer.first == "www.foo1.com") {
+      Utils::verifyAddress({"10.0.0.1", "10.0.0.2"}, answer.second);
+    } else if (answer.first == "www.foo3.com") {
+      Utils::verifyAddress({"10.0.3.1"}, answer.second);
+    } else {
+      FAIL() << "Unexpected domain in DNS response: " << answer.first;
+    }
+  }
+}
+
+TEST_F(DnsFilterTest, InvalidQueryCountTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  // In this buffer the Questions count is incorrect.  We will abort parsing and return a response
+  // to the client.  Since the the filter has successfully parsed the only real query, it does
+  // return a valid response to the client.  The filter will count this query as invalid and
+  // increment the appropriate stat
+  char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x0a,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // Query record for
+      0x6f, 0x33, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  const size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
 }
 
 } // namespace

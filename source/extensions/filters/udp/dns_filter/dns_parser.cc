@@ -171,17 +171,17 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 
   while (state_ != DnsQueryParseState::Finish) {
 
+    // Each aggregate DNS header field is 2 bytes wide.
+    data = buffer->peekBEInt<uint16_t>(offset);
+    offset += field_size;
+    available_bytes -= field_size;
+
     // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
       ENVOY_LOG(error,
                 "Exhausted available bytes in the buffer. Insufficient data to parse query field.");
       return false;
     }
-
-    // Each aggregate DNS header field is 2 bytes wide.
-    data = buffer->peekBEInt<uint16_t>(offset);
-    offset += field_size;
-    available_bytes -= field_size;
 
     if (offset > buffer->length()) {
       ENVOY_LOG(error, "Buffer read offset [{}] is beyond buffer length [{}].", offset,
@@ -417,6 +417,11 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
                                                         uint64_t* offset) {
   uint64_t name_offset = *offset;
   uint64_t available_bytes = buffer->length() - name_offset;
+
+  if (available_bytes == 0) {
+    ENVOY_LOG(error, "No available data in buffer to parse a query record");
+    return nullptr;
+  }
 
   const std::string record_name = parseDnsNameRecord(buffer, &available_bytes, &name_offset);
   if (record_name.empty()) {

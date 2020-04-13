@@ -8,6 +8,16 @@ namespace UdpFilters {
 namespace DnsFilter {
 namespace Utils {
 
+std::string buildQueryFromBytes(const char *bytes, const size_t count) {
+  std::string query;
+
+  for (size_t i = 0; i < count; i++) {
+    query.append(static_cast<const char *>(&bytes[i]), 1);
+  }
+
+  return query;
+}
+
 std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
 
   Runtime::RandomGeneratorImpl random_;
@@ -42,23 +52,23 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
   query.authority_rrs = 0;
   query.additional_rrs = 0;
 
-  Buffer::OwnedImpl buffer_;
-  buffer_.writeBEInt<uint16_t>(query.id);
+  Buffer::OwnedImpl buffer;
+  buffer.writeBEInt<uint16_t>(query.id);
 
   uint16_t flags;
   ::memcpy(&flags, static_cast<void*>(&query.flags), sizeof(uint16_t));
-  buffer_.writeBEInt<uint16_t>(flags);
+  buffer.writeBEInt<uint16_t>(flags);
 
-  buffer_.writeBEInt<uint16_t>(query.questions);
-  buffer_.writeBEInt<uint16_t>(query.answers);
-  buffer_.writeBEInt<uint16_t>(query.authority_rrs);
-  buffer_.writeBEInt<uint16_t>(query.additional_rrs);
+  buffer.writeBEInt<uint16_t>(query.questions);
+  buffer.writeBEInt<uint16_t>(query.answers);
+  buffer.writeBEInt<uint16_t>(query.authority_rrs);
+  buffer.writeBEInt<uint16_t>(query.additional_rrs);
 
   DnsQueryRecord query_rec(name, rec_type, rec_class);
 
-  query_rec.serialize(buffer_);
+  query_rec.serialize(buffer);
 
-  return buffer_.toString();
+  return buffer.toString();
 }
 
 void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecordPtr& answer) {
