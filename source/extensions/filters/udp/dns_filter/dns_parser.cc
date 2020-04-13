@@ -240,7 +240,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   // TODO: Remove before pushing upstream
   dumpFlags(incoming_);
 
-  // Almost always, we will have only one query here.  Per the RFC, QDCOUNT is usually 1
+  // Almost always, we will have only one query here. Per the RFC, QDCOUNT is usually 1
   context->queries_.reserve(incoming_.questions);
   for (auto index = 0; index < incoming_.questions; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, incoming_.questions);

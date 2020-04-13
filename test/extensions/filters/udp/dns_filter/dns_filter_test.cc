@@ -507,7 +507,6 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(2, query_ctx_->answers_.size());
 
-
   // Verify the address returned
   const std::list<std::string> expected{"10.0.0.1", "10.0.0.2"};
   for (const auto& answer : query_ctx_->answers_) {
