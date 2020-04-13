@@ -77,15 +77,6 @@ void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecor
   ASSERT_TRUE(iter != addresses.end());
 }
 
-#if 0
-size_t getResponseQueryCount(DnsMessageParser& parser) {
-  const uint16_t id = parser.getCurrentQueryId();
-  const auto& queries = parser.getActiveQueryRecords();
-
-  return queries.count(id);
-}
-#endif
-
 } // namespace Utils
 } // namespace DnsFilter
 } // namespace UdpFilters

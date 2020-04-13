@@ -110,13 +110,13 @@ class DnsQueryContext {
 public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
                   Network::Address::InstanceConstSharedPtr peer)
-      : local_(std::move(local)), peer_(std::move(peer)), status_(false), id_() {}
+      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false), id_() {}
   ~DnsQueryContext() = default;
 
   Network::Address::InstanceConstSharedPtr local_;
   Network::Address::InstanceConstSharedPtr peer_;
 
-  bool status_;
+  bool parse_status_;
   uint16_t id_;
   DnsQueryPtrVec queries_;
   DnsAnswerMap answers_;
@@ -199,21 +199,6 @@ public:
                             const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr);
 
   /**
-   * @return a reference to a list of queries parsed from a client request
-   */
-  // const DnsQueryPtrVec& getActiveQueryRecords() { return queries_; }
-
-  /**
-   * @return the current query transaction ID being handled
-   */
-  // uint16_t getCurrentQueryId() { return active_transactions_.front(); }
-
-  /**
-   * @return a reference to a map associating the query name to the list of answers
-   */
-  // const DnsAnswerMap& getAnswerRecords() { return answers_; }
-
-  /**
    * @return uint16_t the response code flag value from a parsed dns object
    */
   uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.flags.rcode); }
@@ -228,12 +213,7 @@ public:
    */
   uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
 
-  // size_t getActiveTransactionCount() const { return active_transactions_.size(); }
-
   DnsQueryContextPtr createQueryContext(Network::UdpRecvData& client_request);
-  /**
-   * Reset the internal state of the class.
-   */
 
 private:
   /**

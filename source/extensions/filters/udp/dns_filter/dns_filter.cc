@@ -52,7 +52,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   // Add known domains
   known_suffixes_.reserve(dns_table.known_suffixes().size());
   for (const auto& suffix : dns_table.known_suffixes()) {
-    // TODO: We support only suffixes here. Expand this to support other StringMatcher types
     auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(suffix);
     known_suffixes_.push_back(std::move(matcher_ptr));
   }
@@ -102,10 +101,11 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
       cluster_manager_(config_->clusterManager()),
       message_parser_(std::make_unique<DnsMessageParser>(
           listener_.dispatcher().timeSource(), config_->stats().downstream_rx_query_latency_)) {
-  // TODO retries
 
-  // This callback is executed when the dns resolution completes. At that time
-  // we build an answer record from each IP resolved, then send it to the client
+  // TODO(abbaptis): retries
+
+  // This callback is executed when the dns resolution completes. At that time of a response by the
+  // resolver, we build an answer record from each IP returned then send a response to the client
   answer_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
                             AddressConstPtrVec& iplist) -> void {
     config_->stats().externally_resolved_queries_.inc();
@@ -130,7 +130,7 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   // Parse the query, if it fails return an response to the client
   DnsQueryContextPtr query_context = message_parser_->createQueryContext(client_request);
-  if (!query_context->status_) {
+  if (!query_context->parse_status_) {
     config_->stats().downstream_rx_invalid_queries_.inc();
     sendDnsResponse(std::move(query_context));
     return;
@@ -139,15 +139,14 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   // Resolve the requested name
   auto response = getResponseForQuery(query_context);
 
-  // We were not able to satisfy the request locally. Return an
-  // empty response to the client
+  // We were not able to satisfy the request locally. Return an empty response to the client
   if (response == DnsLookupResponseCode::Failure) {
     sendDnsResponse(std::move(query_context));
     return;
   }
 
-  // Externally resolved. We'll respond to the client when the
-  // external DNS resolution callback returns
+  // Externally resolved. We'll respond to the client when the external DNS resolution callback
+  // is executed
   if (response == DnsLookupResponseCode::External) {
     return;
   }
@@ -164,7 +163,6 @@ void DnsFilter::sendDnsResponse(DnsQueryContextPtr query_context) {
   // parsing error or the incoming query is invalid, we will still generate a valid DNS response
   message_parser_->buildResponseBuffer(query_context, response_);
 
-  // config_->stats().downstream_active_queries_.set(message_parser_->getActiveTransactionCount());
   config_->stats().downstream_tx_responses_.inc();
   config_->stats().downstream_tx_bytes_.recordValue(response_.length());
 

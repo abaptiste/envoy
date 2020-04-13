@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(IpVersions, DnsFilterIntegrationTest,
 
 // Basic External Lookup test.
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
-  setup();
+  setup(0);
   const uint32_t port = lookupPort("listener_0");
   const auto listener_address = Network::Utility::resolveUrl(
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));

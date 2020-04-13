@@ -21,9 +21,8 @@ namespace DnsFilter {
 
 /**
  * All Dns Filter stats. @see stats_macros.h
- * Track the number of answered and un-answered queries for A and AAAA records
  */
-#define ALL_DNS_FILTER_STATS(COUNTER, GAUGE, HISTOGRAM)                                            \
+#define ALL_DNS_FILTER_STATS(COUNTER, HISTOGRAM)                                                   \
   COUNTER(a_record_queries)                                                                        \
   COUNTER(aaaa_record_queries)                                                                     \
   COUNTER(cluster_a_record_answers)                                                                \
@@ -32,12 +31,8 @@ namespace DnsFilter {
   COUNTER(downstream_rx_errors)                                                                    \
   COUNTER(downstream_rx_invalid_queries)                                                           \
   COUNTER(downstream_rx_queries)                                                                   \
-  COUNTER(downstream_tx_external_answer)                                                           \
-  COUNTER(downstream_tx_local_answer)                                                              \
-  COUNTER(downstream_tx_no_answer)                                                                 \
-  COUNTER(downstream_tx_responses)                                                                 \
-  COUNTER(external_a_record_answers)                                                               \
   COUNTER(external_a_record_queries)                                                               \
+  COUNTER(external_a_record_answers)                                                               \
   COUNTER(external_aaaa_record_answers)                                                            \
   COUNTER(external_aaaa_record_queries)                                                            \
   COUNTER(external_unsupported_answers)                                                            \
@@ -48,18 +43,17 @@ namespace DnsFilter {
   COUNTER(local_aaaa_record_answers)                                                               \
   COUNTER(local_unsupported_answers)                                                               \
   COUNTER(unanswered_queries)                                                                      \
-  COUNTER(unsupported_answers)                                                                     \
   COUNTER(unsupported_queries)                                                                     \
-  GAUGE(downstream_active_queries, Accumulate)                                                     \
-  HISTOGRAM(downstream_rx_query_latency, Milliseconds)                                             \
+  COUNTER(downstream_tx_responses)                                                                 \
   HISTOGRAM(downstream_rx_bytes, Bytes)                                                            \
+  HISTOGRAM(downstream_rx_query_latency, Milliseconds)                                             \
   HISTOGRAM(downstream_tx_bytes, Bytes)
 
 /**
  * Struct definition for all Dns Filter stats. @see stats_macros.h
  */
 struct DnsFilterStats {
-  ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT, GENERATE_GAUGE_STRUCT, GENERATE_HISTOGRAM_STRUCT)
+  ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT, GENERATE_HISTOGRAM_STRUCT)
 };
 
 using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrVec>;
@@ -89,7 +83,6 @@ private:
   static DnsFilterStats generateStats(const std::string& stat_prefix, Stats::Scope& scope) {
     const auto final_prefix = absl::StrCat("dns_filter.", stat_prefix);
     return {ALL_DNS_FILTER_STATS(POOL_COUNTER_PREFIX(scope, final_prefix),
-                                 POOL_GAUGE_PREFIX(scope, final_prefix),
                                  POOL_HISTOGRAM_PREFIX(scope, final_prefix))};
   }
 
@@ -125,7 +118,7 @@ public:
   DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
             const DnsFilterEnvoyConfigSharedPtr& config);
 
-  // Network::UdpListenerReadFilter
+  // Network::UdpListenerReadFilter callbacks
   void onData(Network::UdpRecvData& client_request) override;
   void onReceiveError(Api::IoError::IoErrorCode) override;
 
@@ -277,7 +270,6 @@ private:
 
   Network::Address::InstanceConstSharedPtr local_;
   Network::Address::InstanceConstSharedPtr peer_;
-  //Buffer::OwnedImpl response_;
 
   AnswerCallback answer_callback_;
 };

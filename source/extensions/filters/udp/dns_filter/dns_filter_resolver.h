@@ -26,7 +26,7 @@ class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilterResolver(AnswerCallback& callback, AddressConstPtrVec resolvers,
                     std::chrono::milliseconds timeout, Event::Dispatcher& dispatcher)
-      : resolver_(dispatcher.createDnsResolver(resolvers, false /* use tcp for lookups */)),
+      : resolver_(dispatcher.createDnsResolver(resolvers, false /* use_tcp_for_dns_lookups */)),
         callback_(callback), timeout_(timeout),
         resolver_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
         active_query_(nullptr) {}
@@ -46,8 +46,8 @@ public:
 
 private:
   /**
-   * Invoke the DNS Filter callback only if our state indicates we have not timed out waiting for a
-   * response from the external resolver
+   * @brief invokes the DNS Filter callback only if our state indicates we have not timed out
+   * waiting for a response from the external resolver
    */
   void invokeCallback() {
     // We've timed out. Guard against sending a response
@@ -79,7 +79,7 @@ private:
   std::chrono::milliseconds timeout_;
   Event::TimerPtr resolver_timer_;
 
-  DnsQueryRecord* query_rec_;
+  const DnsQueryRecord* query_rec_;
   Network::ActiveDnsQuery* active_query_;
 
   Runtime::RandomGeneratorImpl rng_;

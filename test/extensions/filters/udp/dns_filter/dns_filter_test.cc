@@ -98,7 +98,6 @@ public:
   Network::MockUdpReadFilterCallbacks callbacks_;
   Stats::IsolatedStoreImpl stats_store_;
   Network::UdpRecvData client_request_;
-  Runtime::RandomGeneratorImpl rng_;
 
   Api::ApiPtr api_;
   NiceMock<Filesystem::MockInstance> file_system_;
@@ -209,7 +208,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   sendQueryFromClient("10.0.0.1:1000", "hello");
 
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
   ASSERT_EQ(0, query_ctx_->answers_.size());
@@ -234,7 +233,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   sendQueryFromClient("10.0.0.1:1000", query);
 
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(1, query_ctx_->answers_.size());
@@ -272,7 +271,7 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
     sendQueryFromClient("10.0.0.1:1000", query);
 
     query_ctx_ = response_parser_->createQueryContext(client_request_);
-    ASSERT_TRUE(query_ctx_->status_);
+    ASSERT_TRUE(query_ctx_->parse_status_);
 
     ASSERT_EQ(0, response_parser_->getQueryResponseCode());
     ASSERT_EQ(1, query_ctx_->answers_.size());
@@ -290,8 +289,6 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
   ASSERT_EQ(count, config_->stats().known_domain_queries_.value());
   ASSERT_EQ(count, config_->stats().local_a_record_answers_.value());
   ASSERT_EQ(count, config_->stats().a_record_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
-  // ASSERT_EQ(total_query_bytes, config_->stats().downstream_rx_bytes_.value());
 }
 
 TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
@@ -305,7 +302,7 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
   ASSERT_EQ(0, query_ctx_->answers_.size());
@@ -316,8 +313,6 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   ASSERT_EQ(3, config_->stats().local_a_record_answers_.value());
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
   ASSERT_EQ(1, config_->stats().unanswered_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
-  // ASSERT_EQ(query.size(), config_->stats().downstream_rx_bytes_.value());
 }
 
 TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
@@ -333,7 +328,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
 
   sendQueryFromClient("10.0.0.1:1000", query);
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(expected.size(), query_ctx_->answers_.size());
@@ -349,7 +344,6 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
   ASSERT_EQ(3, config_->stats().local_aaaa_record_answers_.value());
   ASSERT_EQ(1, config_->stats().aaaa_record_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 }
 
 TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
@@ -378,7 +372,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
 
   // parse the result
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(1, query_ctx_->answers_.size());
@@ -396,7 +390,6 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
   ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
   ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
@@ -428,7 +421,7 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
 
   // parse the result
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(expected_address.size(), query_ctx_->answers_.size());
@@ -447,7 +440,6 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
   ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
   ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
@@ -477,7 +469,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
 
   // parse the result
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(3, response_parser_->getQueryResponseCode());
   ASSERT_EQ(0, query_ctx_->answers_.size());
@@ -489,7 +481,6 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
   ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
   ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
-  ASSERT_EQ(0, config_->stats().downstream_active_queries_.value());
 
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
@@ -511,7 +502,7 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
   sendQueryFromClient("10.0.0.1:1000", query);
 
   query_ctx_ = response_parser_->createQueryContext(client_request_);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(0, response_parser_->getQueryResponseCode());
   ASSERT_EQ(2, query_ctx_->answers_.size());

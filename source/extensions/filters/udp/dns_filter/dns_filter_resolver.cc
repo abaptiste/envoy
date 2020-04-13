@@ -38,39 +38,42 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
     return;
   }
 
-  ENVOY_LOG(trace, "Resolving name [{}]", domain_query->name_);
-
   // Re-arm the timeout timer
   resolver_timer_->enableTimer(timeout_);
 
+  // Define the callback that is executed when resolution completes
+  auto resolve_cb = [this](Network::DnsResolver::ResolutionStatus status,
+                           std::list<Network::DnsResponse>&& response) -> void {
+    active_query_ = nullptr;
+
+    ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
+
+    if (resolution_status_ != DnsFilterResolverStatus::Pending) {
+      ENVOY_LOG(debug, "Resolution timed out before callback was executed");
+      return;
+    }
+
+    // We are processing the response here, so we did not timeout. Cancel the timer
+    resolver_timer_->disableTimer();
+
+    // C-ares doesn't expose the TTL in the data available here.
+    if (status == Network::DnsResolver::ResolutionStatus::Success) {
+      for (const auto resp : response) {
+        ASSERT(resp.address_ != nullptr);
+        ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
+        resolved_hosts_.push_back(std::move(resp.address_));
+      }
+    }
+
+    // Invoke the filter callback notifying it of resolved addressses
+    invokeCallback();
+  };
+
+  ENVOY_LOG(trace, "Resolving name [{}]", domain_query->name_);
+
   // Resolve the address in the query and add to the resolved_hosts vector
   resolved_hosts_.clear();
-  active_query_ = resolver_->resolve(
-      domain_query->name_, lookup_family,
-      [this](Network::DnsResolver::ResolutionStatus status,
-             std::list<Network::DnsResponse>&& response) -> void {
-        active_query_ = nullptr;
-
-        if (resolution_status_ != DnsFilterResolverStatus::Pending) {
-          ENVOY_LOG(debug, "Resolution timed out before callback was executed");
-          return;
-        }
-
-        ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
-
-        // C-ares doesn't expose the TTL in the data available here.
-        if (status == Network::DnsResolver::ResolutionStatus::Success) {
-          for (const auto resp : response) {
-            ASSERT(resp.address_ != nullptr);
-            ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
-            resolved_hosts_.push_back(std::move(resp.address_));
-          }
-        }
-
-        // We are processing the response, so we cannot timeout. Cancel the timer
-        resolver_timer_->disableTimer();
-        invokeCallback();
-      });
+  active_query_ = resolver_->resolve(domain_query->name_, lookup_family, resolve_cb);
 }
 
 } // namespace DnsFilter
