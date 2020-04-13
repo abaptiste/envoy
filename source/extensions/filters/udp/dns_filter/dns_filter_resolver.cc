@@ -65,7 +65,7 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
       }
     }
 
-    // Invoke the filter callback notifying it of resolved addressses
+    // Invoke the filter callback notifying it of resolved addresses
     invokeCallback();
   };
 
