@@ -183,6 +183,17 @@ private:
   }
 
   /**
+   * @brief Increment the counter for the parsed query type
+   *
+   * @param queries a vector of all the incoming queries received from a client
+   */
+  void incrementQueryTypeCount(const DnsQueryPtrVec& queries) {
+    for (const auto& query : queries) {
+      incrementQueryTypeCount(query->type_);
+    }
+  }
+
+  /**
    * @brief Increment the counter for the given query type.
    *
    * @param query_type indicate the type of record being resolved (A, AAAA, or other).

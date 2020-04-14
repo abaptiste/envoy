@@ -8,11 +8,11 @@ namespace UdpFilters {
 namespace DnsFilter {
 namespace Utils {
 
-std::string buildQueryFromBytes(const char *bytes, const size_t count) {
+std::string buildQueryFromBytes(const char* bytes, const size_t count) {
   std::string query;
 
   for (size_t i = 0; i < count; i++) {
-    query.append(static_cast<const char *>(&bytes[i]), 1);
+    query.append(static_cast<const char*>(&bytes[i]), 1);
   }
 
   return query;

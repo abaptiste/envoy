@@ -110,13 +110,15 @@ class DnsQueryContext {
 public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
                   Network::Address::InstanceConstSharedPtr peer)
-      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false), id_() {}
+      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false), response_code_(),
+        id_() {}
   ~DnsQueryContext() = default;
 
   Network::Address::InstanceConstSharedPtr local_;
   Network::Address::InstanceConstSharedPtr peer_;
 
   bool parse_status_;
+  DnsResponseCode response_code_;
   uint16_t id_;
   DnsQueryPtrVec queries_;
   DnsAnswerMap answers_;
@@ -223,12 +225,24 @@ private:
   bool parseDnsObject(DnsQueryContextPtr& context, const Buffer::InstancePtr& buffer);
 
   /**
-   * @brief sets the flags in the DNS header of the response sent to a client
+   * @brief sets the response code returned to the client
    *
+   * @param context the query context for which we are generating a response
    * @param queries specify the number of query records contained in the response
    * @param answers specify the number of answer records contained in the response
    */
-  void setDnsResponseFlags(const uint16_t questions, const uint16_t answers);
+  void setResponseCode(DnsQueryContextPtr& context, const uint16_t serialized_queries,
+                       const uint16_t serialized_answers);
+
+  /**
+   * @brief sets the flags in the DNS header of the response sent to a client
+   *
+   * @param context the query context for which we are generating a response
+   * @param queries specify the number of query records contained in the response
+   * @param answers specify the number of answer records contained in the response
+   */
+  void setDnsResponseFlags(DnsQueryContextPtr& context, const uint16_t questions,
+                           const uint16_t answers);
 
   /**
    * @brief Extracts a DNS query name from a buffer

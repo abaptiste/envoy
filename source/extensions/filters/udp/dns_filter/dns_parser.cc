@@ -146,6 +146,7 @@ DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& cl
   query_context->parse_status_ = parseDnsObject(query_context, client_request.buffer_);
 
   if (!query_context->parse_status_) {
+    query_context->response_code_ = DnsResponseCode::FormatError;
     ENVOY_LOG(error, "Unable to parse query buffer from '{}' into a DNS object",
               client_request.addresses_.peer_->ip()->addressAsString());
   }
@@ -236,9 +237,18 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   }
 
   context->id_ = static_cast<uint16_t>(incoming_.id);
+  if (context->id_ == 0) {
+    ENVOY_LOG(debug, "No ID in query");
+    return false;
+  }
 
   // TODO: Remove before pushing upstream
   dumpFlags(incoming_);
+
+  if (incoming_.questions == 0) {
+    ENVOY_LOG(trace, "No questions in DNS request");
+    return false;
+  }
 
   // Almost always, we will have only one query here. Per the RFC, QDCOUNT is usually 1
   context->queries_.reserve(incoming_.questions);
@@ -461,7 +471,8 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   return rec;
 }
 
-void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint16_t answers) {
+void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
+                                           const uint16_t questions, const uint16_t answers) {
 
   // Copy the transaction ID
   generated_.id = incoming_.id;
@@ -491,11 +502,7 @@ void DnsMessageParser::setDnsResponseFlags(const uint16_t questions, const uint1
   generated_.answers = answers;
 
   // The ID must be non-zero so that we can associate the response with the query
-  if (incoming_.id == 0) {
-    generated_.flags.rcode = DnsResponseCode::FormatError;
-  } else {
-    generated_.flags.rcode = (answers == 0 ? DnsResponseCode::NameError : DnsResponseCode::NoError);
-  }
+  generated_.flags.rcode = query_context->response_code_;
 
   // Set the number of questions we are responding to
   generated_.questions = questions;
@@ -540,6 +547,37 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
       std::move(ipaddr));
 
   context->answers_.emplace(query_rec.name_, std::move(answer_record));
+}
+
+void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
+                                       const uint16_t serialized_queries,
+                                       const uint16_t serialized_answers) {
+
+  // If the question is malformed, don't change the response
+  if (context->response_code_ == DnsResponseCode::FormatError) {
+    return;
+  }
+
+  // Check for unsupported request types
+  for (const auto& query : context->queries_) {
+    if (query->type_ != DnsRecordType::A && query->type_ != DnsRecordType::AAAA) {
+      context->response_code_ = DnsResponseCode::NotImplemented;
+      return;
+    }
+  }
+
+  // Output validation
+  if (serialized_queries == 0) {
+    context->response_code_ = DnsResponseCode::FormatError;
+    return;
+  }
+
+  if (serialized_answers == 0) {
+    context->response_code_ = DnsResponseCode::NameError;
+    return;
+  }
+
+  context->response_code_ = DnsResponseCode::NoError;
 }
 
 void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
@@ -595,7 +633,8 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   }
 
   // Build the response buffer for transmission to the client
-  setDnsResponseFlags(serialized_queries, serialized_answers);
+  setResponseCode(query_context, serialized_queries, serialized_answers);
+  setDnsResponseFlags(query_context, serialized_queries, serialized_answers);
 
   buffer.writeBEInt<uint16_t>(generated_.id);
 

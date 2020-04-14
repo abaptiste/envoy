@@ -130,6 +130,9 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 
   // Parse the query, if it fails return an response to the client
   DnsQueryContextPtr query_context = message_parser_->createQueryContext(client_request);
+
+  incrementQueryTypeCount(query_context->queries_);
+
   if (!query_context->parse_status_) {
     config_->stats().downstream_rx_invalid_queries_.inc();
     sendDnsResponse(std::move(query_context));
@@ -182,7 +185,6 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context
    * contains QDCOUNT (usually 1) entries.
    */
   for (const auto& query : context->queries_) {
-    incrementQueryTypeCount(query->type_);
 
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
