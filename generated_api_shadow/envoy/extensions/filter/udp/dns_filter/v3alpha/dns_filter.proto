@@ -58,7 +58,7 @@ message DnsFilterConfig {
     // Envoy allows 5s for the upstream resolution to complete, so the minimum
     // value here should be 5s
 
-    // TODO(abbaptis): There is a strange issue where this message cannot get parsed from the
+    // TODO(abaptiste): There is a strange issue where this message cannot get parsed from the
     // configuration correctly if this message field starts at 1 instead of 2.
     google.protobuf.Duration resolver_timeout = 2 [(validate.rules).duration = {gt {}}];
 
