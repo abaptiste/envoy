@@ -11,7 +11,6 @@ envoy_package()
 
 envoy_cc_library(
     name = "dns_filter_lib",
-    external_deps = ["ares"],
     srcs = [
         "dns_filter.cc",
         "dns_filter_resolver.cc",
@@ -22,6 +21,7 @@ envoy_cc_library(
         "dns_filter_resolver.h",
         "dns_parser.h",
     ],
+    external_deps = ["ares"],
     deps = [
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:dispatcher_interface",
