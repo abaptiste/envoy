@@ -5,8 +5,11 @@ package envoy.config.filter.udp.dns_filter.v2alpha;
 import "envoy/api/v2/core/base.proto";
 import "envoy/data/dns/v2alpha/dns_table.proto";
 
+<<<<<<< HEAD
 import "google/protobuf/duration.proto";
 
+=======
+>>>>>>> master
 import "udpa/annotations/migrate.proto";
 import "udpa/annotations/status.proto";
 import "validate/validate.proto";
@@ -17,7 +20,11 @@ option java_multiple_files = true;
 option (udpa.annotations.file_migrate).move_to_package =
     "envoy.extensions.filter.udp.dns_filter.v3alpha";
 option (udpa.annotations.file_status).work_in_progress = true;
+<<<<<<< HEAD
 option (udpa.annotations.file_status).package_version_status = ACTIVE;
+=======
+option (udpa.annotations.file_status).package_version_status = FROZEN;
+>>>>>>> master
 
 // [#protodoc-title: DNS Filter]
 // DNS Filter :ref:`configuration overview <config_udp_listener_filters_dns_filter>`.
@@ -35,11 +42,18 @@ message DnsFilterConfig {
       // Load the configuration specified from the control plane
       data.dns.v2alpha.DnsTable inline_dns_table = 1;
 
+<<<<<<< HEAD
       // Seed the filter configuration from an external path
+=======
+      // Seed the filter configuration from an external path. This source
+      // is a yaml formatted file that contains the DnsTable driving Envoy's
+      // responses to DNS queries
+>>>>>>> master
       api.v2.core.DataSource external_dns_table = 2;
     }
   }
 
+<<<<<<< HEAD
   // This message contains the configuration for the Dns Filter operating
   // in a client context. This message will contain the timeouts, retry,
   // and forwarding configuration for Envoy to make DNS requests to other
@@ -61,11 +75,17 @@ message DnsFilterConfig {
   }
 
   // The prefix used when emitting DNS filter stats.
+=======
+  // The stat prefix used when emitting DNS filter statistics
+>>>>>>> master
   string stat_prefix = 1 [(validate.rules).string = {min_len: 1}];
 
   // Server context configuration
   ServerContextConfig server_config = 2;
+<<<<<<< HEAD
 
   // Client context configuration
   ClientContextConfig client_config = 3;
+=======
+>>>>>>> master
 }

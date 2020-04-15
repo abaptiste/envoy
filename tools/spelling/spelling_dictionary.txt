@@ -84,6 +84,7 @@ ENOTSUP
 ENV
 EOF
 EOS
+EOY
 EPOLLRDHUP
 EQ
 ERANGE
@@ -355,6 +356,7 @@ alignof
 alloc
 alloca
 allocator
+allowlist
 alls
 alphanumerics
 amongst
@@ -529,6 +531,7 @@ dirname
 djb
 downcasted
 downstreams
+drainable
 dtor
 dubbo
 dup
