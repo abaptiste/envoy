@@ -146,10 +146,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
@@ -165,10 +165,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
@@ -184,10 +184,10 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(2, query_ctx_->answers_.size());
-  ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
@@ -209,10 +209,10 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
-  ASSERT_TRUE(query_ctx_->status_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(2, query_ctx_->answers_.size());
-  ASSERT_EQ(0, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
 }
 
 } // namespace

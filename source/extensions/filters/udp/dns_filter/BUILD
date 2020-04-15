@@ -11,6 +11,7 @@ envoy_package()
 
 envoy_cc_library(
     name = "dns_filter_lib",
+    external_deps = ["ares"],
     srcs = [
         "dns_filter.cc",
         "dns_filter_resolver.cc",

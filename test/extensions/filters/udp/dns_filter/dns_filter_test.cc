@@ -116,6 +116,7 @@ public:
 stat_prefix: "my_prefix"
 client_config:
   forward_query: false
+  resolver_timeout: 5s
   upstream_resolvers:
   - "1.1.1.1"
   - "8.8.8.8"
@@ -154,6 +155,7 @@ server_config:
 stat_prefix: "my_prefix"
 client_config:
   forward_query: true
+  resolver_timeout: 5s
   upstream_resolvers:
     - "1.1.1.1"
     - "8.8.8.8"
@@ -173,6 +175,7 @@ server_config:
 stat_prefix: "my_prefix"
 client_config:
   forward_query: true
+  resolver_timeout: 5s
   upstream_resolvers:
   - "1.1.1.1"
 server_config:
