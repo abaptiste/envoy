@@ -21,21 +21,18 @@ inline void DnsMessageParser::dumpBuffer(const std::string& title,
                                          const Buffer::InstancePtr& buffer, const uint64_t offset) {
 
   // TODO: We should do no work if the log level is not applicable
+  std::stringstream buf;
   const uint64_t data_length = buffer->length();
-  unsigned char buf[1024] = {};
-  unsigned char c;
+  const unsigned char* linearize =
+      static_cast<const unsigned char*>(buffer->linearize(static_cast<uint32_t>(data_length)));
 
-  char* p = reinterpret_cast<char*>(buf);
-  const uint64_t limit = std::min(sizeof(buf) / 5, data_length);
-
-  for (uint64_t i = offset; i < limit; i++) {
+  for (uint64_t i = offset; i < data_length ; i++) {
     if (i && ((i - offset) % 16 == 0)) {
-      p += sprintf(p, "\n");
+      buf << "\n";
     }
-    c = buffer->peekBEInt<unsigned char>(i);
-    p += sprintf(p, "0x%02x ", c);
+    buf << std::setfill('0') << std::hex << static_cast<unsigned char>(linearize[i]) << " ";
   }
-  ENVOY_LOG_MISC(trace, "Starting at {}\n{}\n{}", offset, title, buf);
+  ENVOY_LOG(trace, "Starting at {}\n{}\n{}", offset, title, buf.str());
 }
 
 // Don't push upstream
@@ -62,7 +59,7 @@ inline void DnsMessageParser::dumpFlags(const struct DnsHeader& query) {
 
   const std::string message = ss.str();
 
-  ENVOY_LOG_MISC(trace, "{}", message);
+  ENVOY_LOG(trace, "{}", message);
 }
 
 inline void BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {

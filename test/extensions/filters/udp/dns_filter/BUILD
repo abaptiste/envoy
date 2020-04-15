@@ -7,15 +7,11 @@ load(
 load(
     "//test/extensions:extensions_build_system.bzl",
     "envoy_extension_cc_test",
-<<<<<<< HEAD
     "envoy_extension_cc_test_library",
-=======
->>>>>>> master
 )
 
 envoy_package()
 
-<<<<<<< HEAD
 envoy_extension_cc_test_library(
     name = "dns_filter_test_lib",
     srcs = ["dns_filter_test_utils.cc"],
@@ -27,22 +23,16 @@ envoy_extension_cc_test_library(
     ],
 )
 
-=======
->>>>>>> master
 envoy_extension_cc_test(
     name = "dns_filter_test",
     srcs = ["dns_filter_test.cc"],
     extension_name = "envoy.filters.udp_listener.dns_filter",
     deps = [
-<<<<<<< HEAD
         ":dns_filter_test_lib",
-=======
->>>>>>> master
         "//source/extensions/filters/udp/dns_filter:dns_filter_lib",
         "//test/mocks/server:server_mocks",
         "//test/mocks/upstream:upstream_mocks",
         "//test/test_common:environment_lib",
-<<<<<<< HEAD
         "@envoy_api//envoy/extensions/filter/udp/dns_filter/v3alpha:pkg_cc_proto",
     ],
 )
@@ -57,8 +47,5 @@ envoy_extension_cc_test(
         "//source/extensions/filters/udp/dns_filter:dns_filter_lib",
         "//test/integration:integration_lib",
         "@envoy_api//envoy/config/bootstrap/v3:pkg_cc_proto",
-=======
-        "@envoy_api//envoy/config/filter/udp/dns_filter/v2alpha:pkg_cc_proto",
->>>>>>> master
     ],
 )
