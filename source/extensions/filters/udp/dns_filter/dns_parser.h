@@ -13,8 +13,8 @@ namespace UdpFilters {
 namespace DnsFilter {
 
 // The flags have been verified with dig and this structure should not be modified. The flag order
-// does not match the RFC, but takes byte ordering into account so that serialization does not need
-// and-ing or shifting.
+// here does not match the RFC, but takes byte ordering into account so that serialization does not
+// bitwise operations.
 PACKED_STRUCT(struct DnsHeaderFlags {
   unsigned rcode : 4;  // return code
   unsigned cd : 1;     // checking disabled
@@ -69,7 +69,6 @@ public:
  * record contains the domain requested and the flags dictating the type of record that is sought.
  */
 class DnsQueryRecord : public BaseDnsRecord {
-
 public:
   DnsQueryRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
       : BaseDnsRecord(rec_name, rec_type, rec_class) {}
@@ -82,7 +81,6 @@ public:
 
 using DnsQueryRecordPtr = std::unique_ptr<DnsQueryRecord>;
 using DnsQueryPtrVec = std::vector<DnsQueryRecordPtr>;
-
 using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>;
 
 /**
@@ -106,6 +104,9 @@ public:
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
 
+/**
+ * DnsQueryContext contains all the data necessary for responding to a query from a given client.
+ */
 class DnsQueryContext {
 public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
@@ -125,7 +126,6 @@ public:
 };
 
 using DnsQueryContextPtr = std::unique_ptr<DnsQueryContext>;
-
 using AnswerCallback = std::function<void(
     DnsQueryContextPtr context, const DnsQueryRecord* current_query, AddressConstPtrVec& ipaddr)>;
 
@@ -215,6 +215,12 @@ public:
    */
   uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
 
+  /**
+   * @brief Parse the incoming query and create a context object for the filter
+   *
+   * @param client_request a structure containing addressing information and the buffer received
+   * from a client
+   */
   DnsQueryContextPtr createQueryContext(Network::UdpRecvData& client_request);
 
 private:

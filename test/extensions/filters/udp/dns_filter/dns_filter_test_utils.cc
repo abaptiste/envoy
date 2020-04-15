@@ -1,5 +1,7 @@
 #include "dns_filter_test_utils.h"
 
+#include "common/runtime/runtime_impl.h"
+
 #include "test/test_common/utility.h"
 
 namespace Envoy {
@@ -19,7 +21,6 @@ std::string buildQueryFromBytes(const char* bytes, const size_t count) {
 }
 
 std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint16_t rec_class) {
-
   Runtime::RandomGeneratorImpl random_;
   struct DnsHeader query {};
   uint16_t id = random_.random() & 0xFFFF;
@@ -72,7 +73,6 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
 }
 
 void verifyAddress(const std::list<std::string>& addresses, const DnsAnswerRecordPtr& answer) {
-
   ASSERT_TRUE(answer != nullptr);
   ASSERT_TRUE(answer->ip_addr_ != nullptr);
 

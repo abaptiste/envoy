@@ -1,5 +1,6 @@
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
 
+// TODO: These includes might not be needed in the PR
 #include <iomanip>
 #include <sstream>
 
@@ -26,11 +27,12 @@ inline void DnsMessageParser::dumpBuffer(const std::string& title,
   const unsigned char* linearize =
       static_cast<const unsigned char*>(buffer->linearize(static_cast<uint32_t>(data_length)));
 
-  for (uint64_t i = offset; i < data_length ; i++) {
+  for (uint64_t i = offset; i < data_length; i++) {
     if (i && ((i - offset) % 16 == 0)) {
       buf << "\n";
     }
-    buf << std::setfill('0') << std::hex << static_cast<unsigned char>(linearize[i]) << " ";
+    buf << std::setw(2) << std::setfill('0') << std::hex << static_cast<unsigned int>(linearize[i])
+        << " ";
   }
   ENVOY_LOG(trace, "Starting at {}\n{}\n{}", offset, title, buf.str());
 }
@@ -65,7 +67,7 @@ inline void DnsMessageParser::dumpFlags(const struct DnsHeader& query) {
 inline void BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
 
   // Iterate over a name e.g. "www.domain.com" once and produce a buffer containing each name
-  // segment prefixed by its length
+  // segment prefixed by its length.
 
   static constexpr char SEPARATOR('.');
 
@@ -543,7 +545,6 @@ void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
 
 void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
                                            Buffer::OwnedImpl& buffer) {
-
   // Ensure that responses stay below the 512 byte byte limit. If we are to exceed this we must add
   // DNS extension fields
   //
@@ -551,6 +552,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
   // mind.
   static constexpr uint64_t max_dns_response_size{512};
+  static constexpr uint64_t max_dns_name_size{255};
 
   // Each response must have DNS flags, which take 4 bytes. Account for them immediately so that we
   // can adjust the number of returned answers to remain under the limit
@@ -564,13 +566,23 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   ENVOY_LOG(debug, "Building response for query ID [{}]", query_context->id_);
 
   for (const auto& query : query_context->queries_) {
-
-    // Serialize and remove the query from our list
+    // Serialize and account for each query
     ++serialized_queries;
     query->serialize(query_buffer);
     total_buffer_size += query_buffer.length();
 
     for (const auto& answer : query_context->answers_) {
+      // Query names are limited to 255 characters. Since we are using ares to decode the encoded
+      // names, we should not end up with a non-conforming name here.
+      //
+      // See https://github.com/c-ares/c-ares/blob/master/ares_create_query.c#L191-L194
+      if (query->name_.size() > max_dns_name_size) {
+        ENVOY_LOG(
+            error,
+            "Query name '{}' is longer than the maximum permitted length. Skipping serialization",
+            query->name_);
+        continue;
+      }
 
       if (answer.first != query->name_) {
         continue;
@@ -590,13 +602,14 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
     }
 
     query->query_time_ms_->complete();
-    ENVOY_LOG(debug, "Query delay: {}", query->query_time_ms_->elapsed().count());
+    ENVOY_LOG(trace, "Query ['{}'] latency: {}", query->name_,
+              query->query_time_ms_->elapsed().count());
   }
 
-  // Build the response buffer for transmission to the client
   setResponseCode(query_context, serialized_queries, serialized_answers);
   setDnsResponseFlags(query_context, serialized_queries, serialized_answers);
 
+  // Build the response buffer for transmission to the client
   buffer.writeBEInt<uint16_t>(generated_.id);
 
   uint16_t flags;

@@ -16,7 +16,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig& config)
     : root_scope_(context.scope()), cluster_manager_(context.clusterManager()), api_(context.api()),
       stats_(generateStats(config.stat_prefix(), root_scope_)) {
-
   using envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig;
 
   const auto& server_config = config.server_config();
@@ -36,8 +35,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       addrs.reserve(address_list.size());
       // This will throw an exception if the configured_address string is malformed
       for (const auto& address : address_list) {
-        auto ipaddr =
-            Network::Utility::parseInternetAddress(address, 0 /* port */, true /* v6only */);
+        auto ipaddr = Network::Utility::parseInternetAddress(address, 0 /* port */);
         addrs.push_back(std::move(ipaddr));
       }
     }
@@ -56,27 +54,24 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     known_suffixes_.push_back(std::move(matcher_ptr));
   }
 
-  const auto& client_config = config.client_config();
-  forward_queries_ = client_config.forward_query();
+  forward_queries_ = config.has_client_config();
   if (forward_queries_) {
+    const auto& client_config = config.client_config();
     const auto& upstream_resolvers = client_config.upstream_resolvers();
     resolvers_.reserve(upstream_resolvers.size());
     for (const auto& resolver : upstream_resolvers) {
-      auto ipaddr =
-          Network::Utility::parseInternetAddress(resolver, 0 /* port */, true /* v6only */);
+      auto ipaddr = Network::Utility::parseInternetAddress(resolver, 0 /* port */);
       resolvers_.push_back(std::move(ipaddr));
     }
+    resolver_timeout_ms_ = std::chrono::milliseconds(
+        PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, DefaultResolverTimeoutMs));
   }
-
-  resolver_timeout_ms_ = std::chrono::milliseconds(
-      PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, DefaultResolverTimeoutMs));
 }
 
 bool DnsFilterEnvoyConfig::loadServerConfig(
     const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig::ServerContextConfig&
         config,
     envoy::data::dns::v3::DnsTable& table) {
-
   using envoy::data::dns::v3::DnsTable;
 
   if (config.has_inline_dns_table()) {
@@ -124,7 +119,6 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
-
   config_->stats().downstream_rx_bytes_.recordValue(client_request.buffer_->length());
   config_->stats().downstream_rx_queries_.inc();
 
@@ -159,27 +153,26 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
 }
 
 void DnsFilter::sendDnsResponse(DnsQueryContextPtr query_context) {
+  Buffer::OwnedImpl response;
 
-  Buffer::OwnedImpl response_;
-
-  // This serializes the generated response to the parse query from the client. If there is a
+  // Serializes the generated response to the parsed query from the client. If there is a
   // parsing error or the incoming query is invalid, we will still generate a valid DNS response
-  message_parser_->buildResponseBuffer(query_context, response_);
+  message_parser_->buildResponseBuffer(query_context, response);
 
   config_->stats().downstream_tx_responses_.inc();
-  config_->stats().downstream_tx_bytes_.recordValue(response_.length());
+  config_->stats().downstream_tx_bytes_.recordValue(response.length());
 
   Network::UdpSendData response_data{query_context->local_->ip(), *(query_context->peer_),
-                                     response_};
+                                     response};
   listener_.send(response_data);
 }
 
 DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context) {
-
   /* It appears to be a rare case where we would have more than one query in a single request.
    * It is allowed by the protocol but not widely supported:
    *
    * See: https://www.ietf.org/rfc/rfc1035.txt
+   *
    * The question section is used to carry the "question" in most queries,
    * i.e., the parameters that define what is being asked. The section
    * contains QDCOUNT (usually 1) entries.
@@ -215,11 +208,10 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context
 }
 
 uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
-  uint32_t ttl;
-
   const auto& domain_ttl_config = config_->domainTtl();
   const auto& iter = domain_ttl_config.find(domain);
 
+  uint32_t ttl;
   if (iter == domain_ttl_config.end()) {
     ttl = static_cast<uint32_t>(DnsFilterEnvoyConfig::DefaultResolverTTLs);
   } else {
@@ -230,7 +222,6 @@ uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
 }
 
 bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
-
   const auto& known_suffixes = config_->knownSuffixes();
 
   // If we don't have a list of whitelisted domain suffixes, we will resolve the name with an
@@ -252,7 +243,6 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
 }
 
 bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRecord& query) {
-
   Upstream::ThreadLocalCluster* cluster = cluster_manager_.get(query.name_);
   if (cluster == nullptr) {
     ENVOY_LOG(debug, "Did not find a cluster for name [{}]", query.name_);
@@ -276,7 +266,6 @@ bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRe
 
 bool DnsFilter::resolveViaConfiguredHosts(DnsQueryContextPtr& context,
                                           const DnsQueryRecord& query) {
-
   const auto& domains = config_->domains();
 
   // TODO: If we have a large ( > 100) domain list, use a binary search.

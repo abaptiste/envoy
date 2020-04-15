@@ -27,44 +27,16 @@ public:
   }
 
   static std::string configToUse() {
-    return R"EOF(
-admin:
-  access_log_path: /dev/null
-  address:
-    socket_address:
-      address: 127.0.0.1
-      port_value: 0
-static_resources:
-  clusters:
-    name: cluster_0
-    load_assignment:
-      cluster_name: cluster_0
-      endpoints:
-      - lb_endpoints:
-        - endpoint:
-            address:
-              socket_address:
-                address: 127.0.0.1
-                port_value: 0
-  listeners:
-  - name: listener_0
-    address:
-      socket_address:
-        protocol: UDP
-        address: 127.0.0.1
-        port_value: 0
-    reuse_port: true
+    return absl::StrCat(ConfigHelper::baseUdpListenerConfig(), R"EOF(
     listener_filters:
       name: "envoy.filters.udp.dns_filter"
       typed_config:
         '@type': 'type.googleapis.com/envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig'
         stat_prefix: "my_prefix"
         client_config:
-          forward_query: true
+          resolver_timeout: 5s
           upstream_resolvers:
-          - "1.1.1.1"
           - "8.8.8.8"
-          - "8.8.4.4"
         server_config:
           inline_dns_table:
             external_retry_count: 3
@@ -78,7 +50,9 @@ static_resources:
                   address:
                   - 10.0.0.1
                   - 10.0.0.2
-)EOF";
+                  - 10.0.0.3
+                  - 10.0.0.4
+    )EOF");
   }
 
   void setup(uint32_t upstream_count) {
@@ -132,7 +106,6 @@ INSTANTIATE_TEST_SUITE_P(IpVersions, DnsFilterIntegrationTest,
                          testing::ValuesIn(TestEnvironment::getIpVersionsForTest()),
                          TestUtility::ipTestParamsToString);
 
-// Basic External Lookup test.
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
   setup(0);
   const uint32_t port = lookupPort("listener_0");
@@ -186,7 +159,7 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
   query_ctx_ = response_parser_->createQueryContext(response);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(2, query_ctx_->answers_.size());
+  ASSERT_EQ(4, query_ctx_->answers_.size());
   ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
 }
 

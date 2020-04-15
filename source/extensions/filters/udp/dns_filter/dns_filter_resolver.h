@@ -1,15 +1,9 @@
 #pragma once
 
-#include "envoy/buffer/buffer.h"
 #include "envoy/event/dispatcher.h"
 #include "envoy/network/dns.h"
 
-#include "common/buffer/buffer_impl.h"
-#include "common/runtime/runtime_impl.h"
-
 #include "extensions/filters/udp/dns_filter/dns_parser.h"
-
-#include "absl/synchronization/notification.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -28,7 +22,7 @@ public:
                     std::chrono::milliseconds timeout, Event::Dispatcher& dispatcher)
       : resolver_(dispatcher.createDnsResolver(resolvers, false /* use_tcp_for_dns_lookups */)),
         callback_(callback), timeout_(timeout),
-        resolver_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
+        timeout_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
         active_query_(nullptr) {}
 
   ~DnsFilterResolver() = default;
@@ -54,7 +48,7 @@ private:
     if (resolution_status_ == DnsFilterResolverStatus::TimedOut) {
       return;
     }
-    resolver_timer_->disableTimer();
+    timeout_timer_->disableTimer();
     callback_(std::move(external_context_), query_rec_, resolved_hosts_);
   }
 
@@ -63,8 +57,7 @@ private:
    * will respond appropriately.
    */
   void onResolveTimeout() {
-    // If the resolution status is not Pending, then we've already completed the lookup and
-    // responded to the client.
+    // Guard against executing the filter callback and sending a response
     if (resolution_status_ != DnsFilterResolverStatus::Pending) {
       return;
     }
@@ -77,12 +70,11 @@ private:
 
   AnswerCallback& callback_;
   std::chrono::milliseconds timeout_;
-  Event::TimerPtr resolver_timer_;
+  Event::TimerPtr timeout_timer_;
 
   const DnsQueryRecord* query_rec_;
   Network::ActiveDnsQuery* active_query_;
 
-  Runtime::RandomGeneratorImpl rng_;
   DnsFilterResolverStatus resolution_status_;
   AddressConstPtrVec resolved_hosts_;
 

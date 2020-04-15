@@ -13,7 +13,6 @@
 #include "gtest/gtest.h"
 
 using testing::AtLeast;
-using testing::ByMove;
 using testing::InSequence;
 using testing::Mock;
 using testing::Return;
@@ -37,9 +36,7 @@ public:
   DnsFilterTest()
       : listener_address_(Network::Utility::parseInternetAddressAndPort("127.0.2.1:5353")),
         api_(Api::createApiForTest()) {
-    // TODO: Consume the log setting from the command line
-    // Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
-    Logger::Registry::setLogLevel(spdlog::level::trace);
+    Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
 
     udp_response_.addresses_.local_ = listener_address_;
     udp_response_.addresses_.peer_ = listener_address_;
@@ -109,18 +106,8 @@ public:
 
   DnsQueryContextPtr query_ctx_;
 
-  // This config has external resolution disabled and is used to verify local lookups. With
-  // external resolution disabled, it eliminates having to setup mocks for the resolver callbacks in
-  // each test.
   const std::string forward_query_off_config = R"EOF(
 stat_prefix: "my_prefix"
-client_config:
-  forward_query: false
-  resolver_timeout: 5s
-  upstream_resolvers:
-  - "1.1.1.1"
-  - "8.8.8.8"
-  - "8.8.4.4"
 server_config:
   inline_dns_table:
     external_retry_count: 3
@@ -147,19 +134,16 @@ server_config:
         address_list:
           address:
           - 10.0.3.1
-  )EOF";
+)EOF";
 
-  // This config has external resolution enabled. Each test must setup the mock to save and execute
-  // the resolver callback
   const std::string forward_query_on_config = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
-  forward_query: true
   resolver_timeout: 5s
   upstream_resolvers:
-    - "1.1.1.1"
-    - "8.8.8.8"
-    - "8.8.4.4"
+  - "1.1.1.1"
+  - "8.8.8.8"
+  - "8.8.4.4"
 server_config:
   inline_dns_table:
     external_retry_count: 3
@@ -168,16 +152,15 @@ server_config:
         endpoint:
           address_list:
             address:
-              - 10.0.0.1
-  )EOF";
+            - 10.0.0.1
+)EOF";
 
   const std::string external_dns_table_config = R"EOF(
 stat_prefix: "my_prefix"
 client_config:
-  forward_query: true
   resolver_timeout: 5s
   upstream_resolvers:
-  - "1.1.1.1"
+  - 1.1.1.1
 server_config:
   external_dns_table:
     filename: {}
@@ -350,7 +333,6 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
 }
 
 TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
-
   InSequence s;
 
   const std::string expected_address("130.207.244.251");
@@ -398,7 +380,6 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
 }
 
 TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
-
   InSequence s;
 
   const std::list<std::string> expected_address{"130.207.244.251", "130.207.244.252",
@@ -448,7 +429,6 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
 }
 
 TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
-
   InSequence s;
 
   const std::string expected_address("130.207.244.251");
@@ -488,7 +468,6 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
 }
 
 TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
-
   InSequence s;
 
   std::string temp_path =
@@ -565,7 +544,8 @@ TEST_F(DnsFilterTest, InvalidQueryNameTest) {
 
   setup(forward_query_off_config);
 
-  // In this buffer the name segment sizes are incorrect. We should fail parsing
+  // In this buffer the name segment sizes are incorrect. The filter will indicate that the parsing
+  // failed
   char dns_request[] = {
       0x36, 0x6c,                               // Transaction ID
       0x01, 0x20,                               // Flags
@@ -574,6 +554,38 @@ TEST_F(DnsFilterTest, InvalidQueryNameTest) {
       0x00, 0x00,                               // Authority RRs
       0x00, 0x00,                               // Additional RRs
       0x02, 0x77, 0x77, 0x77, 0x03, 0x66, 0x6f, // Query record for
+      0x6f, 0x33, 0x01, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  const size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
+  ASSERT_EQ(DnsResponseCode::FormatError, response_parser_->getQueryResponseCode());
+
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, InvalidQueryNameTest2) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  // In this buffer the name segment sizes are incorrect. The first segment points
+  // past the end of the buffer. The filter will indicate that the parsing failed.
+  char dns_request[] = {
+      0x36, 0x6c,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x4c, 0x77, 0x77, 0x77, 0x03, 0x66, 0x6f, // Query record for
       0x6f, 0x33, 0x01, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
       0x00, 0x01,                               // Query Type - A
       0x00, 0x01,                               // Query Class - IN

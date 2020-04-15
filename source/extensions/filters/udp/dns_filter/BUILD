@@ -25,7 +25,6 @@ envoy_cc_library(
     deps = [
         "//include/envoy/buffer:buffer_interface",
         "//include/envoy/event:dispatcher_interface",
-        "//include/envoy/event:file_event_interface",
         "//include/envoy/network:address_interface",
         "//include/envoy/network:dns_interface",
         "//include/envoy/network:filter_interface",

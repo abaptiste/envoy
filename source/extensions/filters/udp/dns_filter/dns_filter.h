@@ -20,7 +20,7 @@ namespace UdpFilters {
 namespace DnsFilter {
 
 /**
- * All Dns Filter stats. @see stats_macros.h
+ * All DNS Filter stats. @see stats_macros.h
  */
 #define ALL_DNS_FILTER_STATS(COUNTER, HISTOGRAM)                                                   \
   COUNTER(a_record_queries)                                                                        \
@@ -50,7 +50,7 @@ namespace DnsFilter {
   HISTOGRAM(downstream_tx_bytes, Bytes)
 
 /**
- * Struct definition for all Dns Filter stats. @see stats_macros.h
+ * Struct definition for all DNS Filter stats. @see stats_macros.h
  */
 struct DnsFilterStats {
   ALL_DNS_FILTER_STATS(GENERATE_COUNTER_STRUCT, GENERATE_HISTOGRAM_STRUCT)

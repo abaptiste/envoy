@@ -9,20 +9,20 @@ namespace DnsFilter {
 
 void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
                                       const DnsQueryRecordPtr& domain_query) {
-
   if (active_query_ != nullptr) {
     active_query_->cancel();
     active_query_ = nullptr;
   }
 
-  // Since the context can have more than one query, we need to maintain a pointer to the current
+  external_context_ = std::move(context);
+
+  // Because the context can have more than one query, we need to maintain a pointer to the current
   // query that is being resolved. Since domain_query is a unique pointer to a record in the
   // context, we use a standard pointer to reference the query data when building the response
-  external_context_ = std::move(context);
   query_rec_ = domain_query.get();
 
   resolution_status_ = DnsFilterResolverStatus::Pending;
-  resolver_timer_->disableTimer();
+  timeout_timer_->disableTimer();
 
   Network::DnsLookupFamily lookup_family;
   switch (domain_query->type_) {
@@ -39,7 +39,7 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
   }
 
   // Re-arm the timeout timer
-  resolver_timer_->enableTimer(timeout_);
+  timeout_timer_->enableTimer(timeout_);
 
   // Define the callback that is executed when resolution completes
   auto resolve_cb = [this](Network::DnsResolver::ResolutionStatus status,
@@ -53,8 +53,10 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
       return;
     }
 
+    resolution_status_ = DnsFilterResolverStatus::Complete;
+
     // We are processing the response here, so we did not timeout. Cancel the timer
-    resolver_timer_->disableTimer();
+    timeout_timer_->disableTimer();
 
     // C-ares doesn't expose the TTL in the data available here.
     if (status == Network::DnsResolver::ResolutionStatus::Success) {
@@ -69,13 +71,10 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
     invokeCallback();
   };
 
-  ENVOY_LOG(trace, "Resolving name [{}]", domain_query->name_);
-
   // Resolve the address in the query and add to the resolved_hosts vector
   resolved_hosts_.clear();
   active_query_ = resolver_->resolve(domain_query->name_, lookup_family, resolve_cb);
 }
-
 } // namespace DnsFilter
 } // namespace UdpFilters
 } // namespace Extensions
