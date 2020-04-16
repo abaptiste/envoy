@@ -58,7 +58,8 @@ public:
 
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
-    response_parser_ = std::make_unique<DnsMessageParser>(api_->timeSource(), histogram_);
+    response_parser_ = std::make_unique<DnsMessageParser>(true /* recursive queries */,
+                                                          api_->timeSource(), histogram_);
   }
 
   void setup(const std::string& yaml) {
@@ -748,6 +749,26 @@ TEST_F(DnsFilterTest, NotImplementedQueryTest) {
 
   ASSERT_EQ(0, config_->stats().a_record_queries_.value());
   ASSERT_EQ(0, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, InvalidShortBufferTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+
+  // This is an invalid query. Envoy should handle the packet and indicate a parsing failure
+  char dns_request[] = {0x1c};
+
+  const std::string query = Utils::buildQueryFromBytes(dns_request, 1);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
+  ASSERT_EQ(DnsResponseCode::FormatError, response_parser_->getQueryResponseCode());
+
+  ASSERT_EQ(0, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
 }
 
 } // namespace

@@ -95,9 +95,8 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
       message_parser_(std::make_unique<DnsMessageParser>(
-          listener_.dispatcher().timeSource(), config_->stats().downstream_rx_query_latency_)) {
-
-  // TODO(abbaptis): retries
+          config->forwardQueries(), listener_.dispatcher().timeSource(),
+          config_->stats().downstream_rx_query_latency_)) {
 
   // This callback is executed when the dns resolution completes. At that time of a response by the
   // resolver, we build an answer record from each IP returned then send a response to the client

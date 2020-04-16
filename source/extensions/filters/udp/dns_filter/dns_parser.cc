@@ -34,7 +34,7 @@ inline void DnsMessageParser::dumpBuffer(const std::string& title,
     buf << std::setw(2) << std::setfill('0') << std::hex << static_cast<unsigned int>(linearize[i])
         << " ";
   }
-  ENVOY_LOG(trace, "Starting at {}\n{}\n{}", offset, title, buf.str());
+  ENVOY_LOG(trace, "Starting at {}/{}\n{}\n{}", offset, data_length, title, buf.str());
 }
 
 // Don't push upstream
@@ -173,17 +173,17 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 
   while (state_ != DnsQueryParseState::Finish) {
 
-    // Each aggregate DNS header field is 2 bytes wide.
-    data = buffer->peekBEInt<uint16_t>(offset);
-    offset += field_size;
-    available_bytes -= field_size;
-
     // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
       ENVOY_LOG(error,
                 "Exhausted available bytes in the buffer. Insufficient data to parse query field.");
       return false;
     }
+
+    // Each aggregate DNS header field is 2 bytes wide.
+    data = buffer->peekBEInt<uint16_t>(offset);
+    offset += field_size;
+    available_bytes -= field_size;
 
     if (offset > buffer->length()) {
       ENVOY_LOG(error, "Buffer read offset [{}] is beyond buffer length [{}].", offset,
@@ -451,8 +451,8 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
   // Copy Recursion flags
   generated_.flags.rd = incoming_.flags.rd;
 
-  // TODO: This should be predicated on whether the user enables external lookups
-  generated_.flags.ra = 0;
+  // Set the recursion flag based on whether Envoy is configured to forward queries
+  generated_.flags.ra = recursion_available_;
 
   // reserved flag is not set
   generated_.flags.z = 0;

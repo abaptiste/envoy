@@ -144,8 +144,9 @@ enum class DnsQueryParseState {
  */
 class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsMessageParser(TimeSource& timesource, Stats::Histogram& latency_histogram)
-      : timesource_(timesource), query_latency_histogram_(latency_histogram) {}
+  DnsMessageParser(bool recurse, TimeSource& timesource, Stats::Histogram& latency_histogram)
+      : recursion_available_(recurse), timesource_(timesource),
+        query_latency_histogram_(latency_histogram) {}
   ~DnsMessageParser() = default;
 
   // TODO: Do not include this in the PR
@@ -260,6 +261,8 @@ private:
    */
   const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
                                        uint64_t* name_offset);
+
+  bool recursion_available_;
 
   TimeSource& timesource_;
   Stats::Histogram& query_latency_histogram_;

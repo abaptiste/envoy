@@ -23,7 +23,8 @@ public:
 
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
-    response_parser_ = std::make_unique<DnsMessageParser>(api_->timeSource(), histogram_);
+    response_parser_ = std::make_unique<DnsMessageParser>(true /*recursive queries */,
+                                                          api_->timeSource(), histogram_);
   }
 
   static std::string configToUse() {
