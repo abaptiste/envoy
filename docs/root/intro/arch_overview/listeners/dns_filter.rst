@@ -6,7 +6,7 @@ Envoy supports DNS responses via a :ref:`UDP listener DNS Filter
 
 The DNS filter supports responding to forward queries for A and AAAA records. The answers are
 discovered from statically configured resources, clusters, or external DNS servers. The filter 
-will return DNS responses up to to 512 bytes.  If domains are configured with multiple addresses,
+will return DNS responses up to to 512 bytes. If domains are configured with multiple addresses,
 or clusters with multiple endpoints, Envoy will return each discovered address up to the
 aforementioned size limit.
 
