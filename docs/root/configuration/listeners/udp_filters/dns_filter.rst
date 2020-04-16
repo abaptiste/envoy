@@ -18,7 +18,7 @@ configured domains. The filter's configuration specifies the names and addresses
 will answer as well as the configuration needed to send queries externally for unknown domains.
 
 The filter supports local and external DNS resolution. If a lookup for a name does not match a
-statically configured domain, or a provisioned cluster name, Envoy will refer the query to an
+statically configured domain, or a provisioned cluster name, Envoy can refer the query to an
 external resolver for an answer. Users have the option of specifying the DNS servers that Envoy
 will use for external resolution. Users can disable external DNS resolution by omitting the
 client configuration object.
@@ -68,7 +68,13 @@ Example Configuration
 
 
 In this example, Envoy is configured to respond to client queries for three domains. For any
-other query, it will forward upstream to external resolvers.
+other query, it will forward upstream to external resolvers. The filter will return an address
+matching the input query type. If the query is for type A records and no A records are configured,
+Envoy will return no addresses and set the response code appropriately. Conversely, if there are
+matching records for the query type, each configured address is returned. This is also true for
+AAAA records. Only A and AAAA records are supported. If the filter parses other queries for other
+record types, the filter immediately responds indicating that the query is not supported.
+
 
 The filter can also consume its configuration from an external dns table. The same configuration
 that appears in the static configuration can be stored in a JSON file and referenced in the
