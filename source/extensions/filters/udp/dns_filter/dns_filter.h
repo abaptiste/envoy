@@ -1,7 +1,7 @@
 #pragma once
 
 #include "envoy/event/file_event.h"
-#include "envoy/extensions/filter/udp/dns_filter/v3alpha/dns_filter.pb.h"
+#include "envoy/extensions/filters/udp/dns_filter/v3alpha/dns_filter.pb.h"
 #include "envoy/network/filter.h"
 
 #include "common/buffer/buffer_impl.h"
@@ -65,7 +65,7 @@ class DnsFilterEnvoyConfig {
 public:
   DnsFilterEnvoyConfig(
       Server::Configuration::ListenerFactoryContext& context,
-      const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig& config);
+      const envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig& config);
 
   DnsFilterStats& stats() const { return stats_; }
   const DnsVirtualDomainConfig& domains() const { return virtual_domains_; }
@@ -86,8 +86,8 @@ private:
                                  POOL_HISTOGRAM_PREFIX(scope, final_prefix))};
   }
 
-  bool loadServerConfig(const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig::
-                            ServerContextConfig& config,
+  bool loadServerConfig(const envoy::extensions::filters::udp::dns_filter::v3alpha::
+                            DnsFilterConfig::ServerContextConfig& config,
                         envoy::data::dns::v3::DnsTable& table);
 
   Stats::Scope& root_scope_;

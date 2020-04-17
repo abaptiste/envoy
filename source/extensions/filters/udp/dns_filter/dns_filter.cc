@@ -13,10 +13,10 @@ namespace DnsFilter {
 
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
-    const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig& config)
+    const envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig& config)
     : root_scope_(context.scope()), cluster_manager_(context.clusterManager()), api_(context.api()),
       stats_(generateStats(config.stat_prefix(), root_scope_)) {
-  using envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig;
+  using envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig;
 
   const auto& server_config = config.server_config();
 
@@ -69,8 +69,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 }
 
 bool DnsFilterEnvoyConfig::loadServerConfig(
-    const envoy::extensions::filter::udp::dns_filter::v3alpha::DnsFilterConfig::ServerContextConfig&
-        config,
+    const envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig::
+        ServerContextConfig& config,
     envoy::data::dns::v3::DnsTable& table) {
   using envoy::data::dns::v3::DnsTable;
 

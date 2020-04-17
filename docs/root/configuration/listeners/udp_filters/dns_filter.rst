@@ -102,28 +102,30 @@ DnsTable JSON Configuration
 
 .. code-block:: json
 
-  known_suffixes: [
-    { suffix: "suffix1.com" },
-    { suffix: "suffix2.com" }
-  ],
-  virtual_domains: [
-    {
-      name: "www.suffix1.com",
-      endpoint: {
-        address_list: {
-          address: [ "10.0.0.1", "10.0.0.2" ]
+  {
+    "known_suffixes": [
+      { "suffix": "suffix1.com" },
+      { "suffix": "suffix2.com" }
+    ],
+    "virtual_domains": [
+      {
+        "name": "www.suffix1.com",
+        "endpoint": {
+          "address_list": {
+            "address": [ "10.0.0.1", "10.0.0.2" ]
+          }
+        }
+      },
+      {
+        "name": "www.suffix2.com",
+        "endpoint": {
+          "address_list": {
+            "address": [ "2001:8a:c1::2800:7" ]
+          }
         }
       }
-    },
-    {
-      name: "www.suffix2.com",
-      endpoint: {
-        address_list: {
-          address: [ "2001:8a:c1::2800:7" ]
-        }
-      }
-    }
-  ]
+    ]
+  }
 
 
 By utilizing this configuration, the DNS responses can be configured separately from the Envoy
