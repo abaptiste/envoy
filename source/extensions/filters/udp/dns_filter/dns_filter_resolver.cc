@@ -8,7 +8,7 @@ namespace UdpFilters {
 namespace DnsFilter {
 
 void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
-                                      const DnsQueryRecord* domain_query) {
+                                             const DnsQueryRecord* domain_query) {
   if (active_query_ != nullptr) {
     active_query_->cancel();
     active_query_ = nullptr;

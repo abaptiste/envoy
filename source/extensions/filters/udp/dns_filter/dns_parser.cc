@@ -615,7 +615,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
 
       Buffer::OwnedImpl serialized_answer;
       if (!answer.second->serialize(serialized_answer)) {
-         ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
+        ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
         continue;
       }
       const uint64_t serialized_answer_length = serialized_answer.length();
