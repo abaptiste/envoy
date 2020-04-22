@@ -34,7 +34,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     if (virtual_domain.endpoint().has_address_list()) {
       const auto& address_list = virtual_domain.endpoint().address_list().address();
       addrs.reserve(address_list.size());
-      // Creating the ipaddr will throw an exception if the address string is malformed
+      // Creating the IP address will throw an exception if the address string is malformed
       for (const auto& address : address_list) {
         auto ipaddr = Network::Utility::parseInternetAddress(address, 0 /* port */);
         addrs.push_back(std::move(ipaddr));
