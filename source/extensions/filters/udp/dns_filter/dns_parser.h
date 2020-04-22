@@ -1,7 +1,9 @@
 #pragma once
 
 #include "envoy/buffer/buffer.h"
+#include "envoy/common/platform.h"
 #include "envoy/network/address.h"
+#include "envoy/network/dns.h"
 #include "envoy/network/listener.h"
 
 #include "common/buffer/buffer_impl.h"
@@ -12,40 +14,9 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-// The flags have been verified with dig and this structure should not be modified. The flag order
-// here does not match the RFC, but takes byte ordering into account so that serialization does not
-// bitwise operations.
-PACKED_STRUCT(struct DnsHeaderFlags {
-  unsigned rcode : 4;  // return code
-  unsigned cd : 1;     // checking disabled
-  unsigned ad : 1;     // authenticated data
-  unsigned z : 1;      // z - bit (must be zero in queries per RFC1035)
-  unsigned ra : 1;     // recursion available
-  unsigned rd : 1;     // recursion desired
-  unsigned tc : 1;     // truncated response
-  unsigned aa : 1;     // authoritative answer
-  unsigned opcode : 4; // operation code
-  unsigned qr : 1;     // query or response
-});
-
-using dns_query_flags_t = struct dns_query_flags_s;
-
-/**
- * Structure representing the DNS header as it appears in a packet
- * See https://www.ietf.org/rfc/rfc1035.txt for more details
- */
-PACKED_STRUCT(struct DnsHeader {
-  uint16_t id;
-  struct DnsHeaderFlags flags;
-  uint16_t questions;
-  uint16_t answers;
-  uint16_t authority_rrs;
-  uint16_t additional_rrs;
-});
-
-enum DnsRecordClass { IN = 1 };
-enum DnsRecordType { A = 1, AAAA = 28 };
-enum DnsResponseCode { NoError, FormatError, ServerFailure, NameError, NotImplemented };
+constexpr uint16_t DNS_RECORD_CLASS_IN = 1;
+constexpr uint16_t DNS_RECORD_TYPE_A = 1;
+constexpr uint16_t DNS_RECORD_TYPE_AAAA = 28;
 
 /**
  * BaseDnsRecord contains the fields and functions common to both query and answer records.
@@ -56,8 +27,8 @@ public:
       : name_(rec_name), type_(rec_type), class_(rec_class) {}
 
   virtual ~BaseDnsRecord() = default;
-  void serializeName(Buffer::OwnedImpl& output);
-  virtual void serialize(Buffer::OwnedImpl& output) PURE;
+  bool serializeName(Buffer::OwnedImpl& output);
+  virtual bool serialize(Buffer::OwnedImpl& output) PURE;
 
   const std::string name_;
   const uint16_t type_;
@@ -74,7 +45,7 @@ public:
       : BaseDnsRecord(rec_name, rec_type, rec_class) {}
 
   ~DnsQueryRecord() override = default;
-  void serialize(Buffer::OwnedImpl& output) override;
+  bool serialize(Buffer::OwnedImpl& output) override;
 
   std::unique_ptr<Stats::HistogramCompletableTimespanImpl> query_time_ms_;
 };
@@ -95,7 +66,7 @@ public:
       : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
 
   ~DnsAnswerRecord() override = default;
-  void serialize(Buffer::OwnedImpl& output) override;
+  bool serialize(Buffer::OwnedImpl& output) override;
 
   const uint32_t ttl_;
   Network::Address::InstanceConstSharedPtr ip_addr_;
@@ -103,6 +74,8 @@ public:
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
+
+enum DnsResponseCode { NoError, FormatError, ServerFailure, NameError, NotImplemented };
 
 /**
  * DnsQueryContext contains all the data necessary for responding to a query from a given client.
@@ -112,7 +85,7 @@ public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
                   Network::Address::InstanceConstSharedPtr peer)
       : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false), response_code_(),
-        id_() {}
+        id_(), retry_(), resolver_status_() {}
   ~DnsQueryContext() = default;
 
   Network::Address::InstanceConstSharedPtr local_;
@@ -121,12 +94,14 @@ public:
   bool parse_status_;
   DnsResponseCode response_code_;
   uint16_t id_;
+  uint32_t retry_;
+  Network::DnsResolver::ResolutionStatus resolver_status_;
   DnsQueryPtrVec queries_;
   DnsAnswerMap answers_;
 };
 
 using DnsQueryContextPtr = std::unique_ptr<DnsQueryContext>;
-using AnswerCallback = std::function<void(
+using DnsFilterResolverCallback = std::function<void(
     DnsQueryContextPtr context, const DnsQueryRecord* current_query, AddressConstPtrVec& ipaddr)>;
 
 enum class DnsQueryParseState {
@@ -144,6 +119,35 @@ enum class DnsQueryParseState {
  */
 class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 public:
+  // The flags have been verified with dig and this structure should not be modified. The flag order
+  // here does not match the RFC, but takes byte ordering into account so that serialization does
+  // not bitwise operations.
+  PACKED_STRUCT(struct DnsHeaderFlags {
+    unsigned rcode : 4;  // return code
+    unsigned cd : 1;     // checking disabled
+    unsigned ad : 1;     // authenticated data
+    unsigned z : 1;      // z - bit (must be zero in queries per RFC1035)
+    unsigned ra : 1;     // recursion available
+    unsigned rd : 1;     // recursion desired
+    unsigned tc : 1;     // truncated response
+    unsigned aa : 1;     // authoritative answer
+    unsigned opcode : 4; // operation code
+    unsigned qr : 1;     // query or response
+  });
+
+  /**
+   * Structure representing the DNS header as it appears in a packet
+   * See https://www.ietf.org/rfc/rfc1035.txt for more details
+   */
+  PACKED_STRUCT(struct DnsHeader {
+    uint16_t id;
+    struct DnsHeaderFlags flags;
+    uint16_t questions;
+    uint16_t answers;
+    uint16_t authority_rrs;
+    uint16_t additional_rrs;
+  });
+
   DnsMessageParser(bool recurse, TimeSource& timesource, Stats::Histogram& latency_histogram)
       : recursion_available_(recurse), timesource_(timesource),
         query_latency_histogram_(latency_histogram) {}

@@ -64,18 +64,28 @@ inline void DnsMessageParser::dumpFlags(const struct DnsHeader& query) {
   ENVOY_LOG(trace, "{}", message);
 }
 
-inline void BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
-
+inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   // Iterate over a name e.g. "www.domain.com" once and produce a buffer containing each name
   // segment prefixed by its length.
-
   static constexpr char SEPARATOR('.');
+  static constexpr uint64_t MAXLABEL{63};
+  static constexpr uint64_t MAXLENGTH{255};
+
+  // Names are restricted to 255 bytes per RFC
+  if (name_.size() > MAXLENGTH) {
+    return false;
+  }
 
   size_t last = 0;
   size_t count = name_.find_first_of(SEPARATOR);
   auto iter = name_.begin();
 
   while (count != std::string::npos) {
+
+    // Each segment or label is restricted to 63 bytes per RFC
+    if (count > MAXLABEL) {
+      return false;
+    }
 
     count -= last;
     output.writeBEInt<uint8_t>(count);
@@ -106,20 +116,29 @@ inline void BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
 
   // Terminate the name record with a null byte
   output.writeByte(0x00);
+  return true;
 }
 
 // Serialize a DNS Query Record
-void DnsQueryRecord::serialize(Buffer::OwnedImpl& output) {
+bool DnsQueryRecord::serialize(Buffer::OwnedImpl& output) {
 
-  serializeName(output);
+  if (!serializeName(output)) {
+    return false;
+  }
+
   output.writeBEInt<uint16_t>(type_);
   output.writeBEInt<uint16_t>(class_);
+
+  return true;
 }
 
 // Serialize a DNS Answer Record
-void DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
+bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
 
-  serializeName(output);
+  if (!serializeName(output)) {
+    return false;
+  }
+
   output.writeBEInt<uint16_t>(type_);
   output.writeBEInt<uint16_t>(class_);
   output.writeBEInt<uint32_t>(ttl_);
@@ -138,6 +157,8 @@ void DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
     output.writeBEInt<uint16_t>(4);
     output.writeLEInt<uint32_t>(ip_address->ipv4()->address());
   }
+
+  return true;
 }
 
 DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& client_request) {
@@ -358,14 +379,14 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
   // types, we must account for them here
   Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
-  if (record_type == DnsRecordType::A) {
+  if (record_type == DNS_RECORD_TYPE_A) {
     sockaddr_in sa4;
     sa4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
     ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
 
     data_offset += data_length;
 
-  } else if (record_type == DnsRecordType::AAAA) {
+  } else if (record_type == DNS_RECORD_TYPE_AAAA) {
     sockaddr_in6 sa6;
     uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
     static constexpr size_t count = sizeof(absl::uint128) / sizeof(uint8_t);
@@ -484,14 +505,14 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
 
   // Verify that we have an address matching the query record type
   switch (query_rec.type_) {
-  case DnsRecordType::AAAA:
+  case DNS_RECORD_TYPE_AAAA:
     if (ipaddr->ip()->ipv6() == nullptr) {
       ENVOY_LOG(error, "Unable to return IPV6 address for query");
       return;
     }
     break;
 
-  case DnsRecordType::A:
+  case DNS_RECORD_TYPE_A:
     if (ipaddr->ip()->ipv4() == nullptr) {
       ENVOY_LOG(error, "Unable to return IPV4 address for query");
       return;
@@ -523,7 +544,7 @@ void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
 
   // Check for unsupported request types
   for (const auto& query : context->queries_) {
-    if (query->type_ != DnsRecordType::A && query->type_ != DnsRecordType::AAAA) {
+    if (query->type_ != DNS_RECORD_TYPE_A && query->type_ != DNS_RECORD_TYPE_AAAA) {
       context->response_code_ = DnsResponseCode::NotImplemented;
       return;
     }
@@ -567,8 +588,12 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
 
   for (const auto& query : query_context->queries_) {
     // Serialize and account for each query
+    if (!query->serialize(query_buffer)) {
+      ENVOY_LOG(debug, "Unable to serialize query record for {}", query->name_);
+      continue;
+    }
+
     ++serialized_queries;
-    query->serialize(query_buffer);
     total_buffer_size += query_buffer.length();
 
     for (const auto& answer : query_context->answers_) {
@@ -589,7 +614,10 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       }
 
       Buffer::OwnedImpl serialized_answer;
-      answer.second->serialize(serialized_answer);
+      if (!answer.second->serialize(serialized_answer)) {
+         ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
+        continue;
+      }
       const uint64_t serialized_answer_length = serialized_answer.length();
 
       if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {

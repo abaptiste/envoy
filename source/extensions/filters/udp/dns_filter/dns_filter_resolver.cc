@@ -7,8 +7,8 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
-                                      const DnsQueryRecordPtr& domain_query) {
+void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
+                                      const DnsQueryRecord* domain_query) {
   if (active_query_ != nullptr) {
     active_query_->cancel();
     active_query_ = nullptr;
@@ -19,22 +19,22 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
   // Because the context can have more than one query, we need to maintain a pointer to the current
   // query that is being resolved. Since domain_query is a unique pointer to a record in the
   // context, we use a standard pointer to reference the query data when building the response
-  query_rec_ = domain_query.get();
+  query_rec_ = domain_query;
 
   resolution_status_ = DnsFilterResolverStatus::Pending;
   timeout_timer_->disableTimer();
 
   Network::DnsLookupFamily lookup_family;
   switch (domain_query->type_) {
-  case DnsRecordType::A:
+  case DNS_RECORD_TYPE_A:
     lookup_family = Network::DnsLookupFamily::V4Only;
     break;
-  case DnsRecordType::AAAA:
+  case DNS_RECORD_TYPE_AAAA:
     lookup_family = Network::DnsLookupFamily::V6Only;
     break;
   default:
     ENVOY_LOG(error, "Unknown query type [{}] for upstream lookup", domain_query->type_);
-    invokeCallback();
+    invokeCallback(Network::DnsResolver::ResolutionStatus::Failure);
     return;
   }
 
@@ -68,7 +68,7 @@ void DnsFilterResolver::resolve_query(DnsQueryContextPtr context,
     }
 
     // Invoke the filter callback notifying it of resolved addresses
-    invokeCallback();
+    invokeCallback(status);
   };
 
   // Resolve the address in the query and add to the resolved_hosts vector

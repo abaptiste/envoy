@@ -18,7 +18,7 @@ enum class DnsFilterResolverStatus { Pending, Complete, TimedOut };
  */
 class DnsFilterResolver : Logger::Loggable<Logger::Id::filter> {
 public:
-  DnsFilterResolver(AnswerCallback& callback, AddressConstPtrVec resolvers,
+  DnsFilterResolver(DnsFilterResolverCallback& callback, AddressConstPtrVec resolvers,
                     std::chrono::milliseconds timeout, Event::Dispatcher& dispatcher)
       : resolver_(dispatcher.createDnsResolver(resolvers, false /* use_tcp_for_dns_lookups */)),
         callback_(callback), timeout_(timeout),
@@ -36,19 +36,21 @@ public:
    *
    * @param domain_query the query record object containing the name for which we are resolving
    */
-  void resolve_query(DnsQueryContextPtr context, const DnsQueryRecordPtr& domain_query);
+  void resolveExternalQuery(DnsQueryContextPtr context, const DnsQueryRecord* domain_query);
 
 private:
   /**
    * @brief invokes the DNS Filter callback only if our state indicates we have not timed out
    * waiting for a response from the external resolver
    */
-  void invokeCallback() {
+  void invokeCallback(Network::DnsResolver::ResolutionStatus status) {
     // We've timed out. Guard against sending a response
     if (resolution_status_ == DnsFilterResolverStatus::TimedOut) {
       return;
     }
+
     timeout_timer_->disableTimer();
+    external_context_->resolver_status_ = status;
     callback_(std::move(external_context_), query_rec_, resolved_hosts_);
   }
 
@@ -63,12 +65,13 @@ private:
     }
     resolution_status_ = DnsFilterResolverStatus::TimedOut;
     resolved_hosts_.clear();
+    external_context_->resolver_status_ = Network::DnsResolver::ResolutionStatus::Failure;
     callback_(std::move(external_context_), query_rec_, resolved_hosts_);
   }
 
   const Network::DnsResolverSharedPtr resolver_;
 
-  AnswerCallback& callback_;
+  DnsFilterResolverCallback& callback_;
   std::chrono::milliseconds timeout_;
   Event::TimerPtr timeout_timer_;
 

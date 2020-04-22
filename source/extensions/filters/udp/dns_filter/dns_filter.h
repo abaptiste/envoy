@@ -2,6 +2,7 @@
 
 #include "envoy/event/file_event.h"
 #include "envoy/extensions/filters/udp/dns_filter/v3alpha/dns_filter.pb.h"
+#include "envoy/network/dns.h"
 #include "envoy/network/filter.h"
 
 #include "common/buffer/buffer_impl.h"
@@ -61,7 +62,7 @@ using DnsVirtualDomainConfig = absl::flat_hash_map<std::string, AddressConstPtrV
 /**
  * DnsFilter configuration class abstracting access to data necessary for the filter's operation
  */
-class DnsFilterEnvoyConfig {
+class DnsFilterEnvoyConfig : public Logger::Loggable<Logger::Id::filter> {
 public:
   DnsFilterEnvoyConfig(
       Server::Configuration::ListenerFactoryContext& context,
@@ -74,6 +75,7 @@ public:
   Upstream::ClusterManager& clusterManager() const { return cluster_manager_; }
   const AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forwardQueries() const { return forward_queries_; }
+  uint64_t retryCount() const { return retry_count_; }
   std::chrono::milliseconds resolverTimeout() const { return resolver_timeout_ms_; }
 
   static constexpr uint64_t DefaultResolverTimeoutMs = 500;
@@ -100,6 +102,7 @@ private:
   std::vector<Matchers::StringMatcherPtr> known_suffixes_;
   absl::flat_hash_map<std::string, uint64_t> domain_ttl_;
   bool forward_queries_;
+  uint64_t retry_count_;
   AddressConstPtrVec resolvers_;
   std::chrono::milliseconds resolver_timeout_ms_;
 };
@@ -170,10 +173,10 @@ private:
    */
   void incrementExternalQueryTypeCount(const uint16_t query_type) {
     switch (query_type) {
-    case DnsRecordType::A:
+    case DNS_RECORD_TYPE_A:
       config_->stats().external_a_record_queries_.inc();
       break;
-    case DnsRecordType::AAAA:
+    case DNS_RECORD_TYPE_AAAA:
       config_->stats().external_aaaa_record_queries_.inc();
       break;
     default:
@@ -200,10 +203,10 @@ private:
    */
   void incrementQueryTypeCount(const uint16_t query_type) {
     switch (query_type) {
-    case DnsRecordType::A:
+    case DNS_RECORD_TYPE_A:
       config_->stats().a_record_queries_.inc();
       break;
-    case DnsRecordType::AAAA:
+    case DNS_RECORD_TYPE_AAAA:
       config_->stats().aaaa_record_queries_.inc();
       break;
     default:
@@ -219,10 +222,10 @@ private:
    */
   void incrementClusterQueryTypeAnswerCount(const uint16_t query_type) {
     switch (query_type) {
-    case DnsRecordType::A:
+    case DNS_RECORD_TYPE_A:
       config_->stats().cluster_a_record_answers_.inc();
       break;
-    case DnsRecordType::AAAA:
+    case DNS_RECORD_TYPE_AAAA:
       config_->stats().cluster_aaaa_record_answers_.inc();
       break;
     default:
@@ -239,10 +242,10 @@ private:
    */
   void incrementLocalQueryTypeAnswerCount(const uint16_t query_type) {
     switch (query_type) {
-    case DnsRecordType::A:
+    case DNS_RECORD_TYPE_A:
       config_->stats().local_a_record_answers_.inc();
       break;
-    case DnsRecordType::AAAA:
+    case DNS_RECORD_TYPE_AAAA:
       config_->stats().local_aaaa_record_answers_.inc();
       break;
     default:
@@ -259,10 +262,10 @@ private:
    */
   void incrementExternalQueryTypeAnswerCount(const uint16_t query_type) {
     switch (query_type) {
-    case DnsRecordType::A:
+    case DNS_RECORD_TYPE_A:
       config_->stats().external_a_record_answers_.inc();
       break;
-    case DnsRecordType::AAAA:
+    case DNS_RECORD_TYPE_AAAA:
       config_->stats().external_aaaa_record_answers_.inc();
       break;
     default:
@@ -282,7 +285,7 @@ private:
   Network::Address::InstanceConstSharedPtr local_;
   Network::Address::InstanceConstSharedPtr peer_;
 
-  AnswerCallback answer_callback_;
+  DnsFilterResolverCallback resolver_callback_;
 };
 
 } // namespace DnsFilter

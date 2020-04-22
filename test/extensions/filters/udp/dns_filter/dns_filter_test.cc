@@ -207,6 +207,49 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
 }
 
+TEST_F(DnsFilterTest, InvalidQueryNameTooLongTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  std::string domain(256, 'a');
+
+  sendQueryFromClient("10.0.0.1:1000", domain);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
+
+  ASSERT_EQ(DnsResponseCode::FormatError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
+
+  // Validate stats
+  ASSERT_EQ(0, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+  ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
+  ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
+}
+
+TEST_F(DnsFilterTest, InvalidLabelNameTooLongTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  std::string domain(64, 'a');
+  domain += ".com";
+
+  sendQueryFromClient("10.0.0.1:1000", domain);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_FALSE(query_ctx_->parse_status_);
+
+  ASSERT_EQ(DnsResponseCode::FormatError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
+
+  // Validate stats
+  ASSERT_EQ(0, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+  ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
+  ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
+}
+
 TEST_F(DnsFilterTest, SingleTypeAQuery) {
   InSequence s;
 
@@ -214,7 +257,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
 
   const std::string domain("www.foo3.com");
   const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
@@ -252,7 +295,7 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
 
   for (size_t i = 0; i < count; i++) {
     const std::string query =
-        Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+        Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
     total_query_bytes += query.size();
     ASSERT_FALSE(query.empty());
     sendQueryFromClient("10.0.0.1:1000", query);
@@ -284,7 +327,7 @@ TEST_F(DnsFilterTest, LocalTypeAQueryFail) {
   setup(forward_query_off_config);
 
   const std::string query =
-      Utils::buildQueryForDomain("www.foo2.com", DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain("www.foo2.com", DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
@@ -310,7 +353,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   std::list<std::string> expected{"2001:8a:c1::2800:7", "2001:8a:c1::2800:8", "2001:8a:c1::2800:9"};
   const std::string domain("www.foo2.com");
   const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::AAAA, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_AAAA, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
@@ -346,7 +389,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -394,7 +437,7 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -442,7 +485,7 @@ TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(query_host, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(query_host, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -479,7 +522,7 @@ TEST_F(DnsFilterTest, ConsumeExternalTableTest) {
 
   const std::string domain("www.external_foo1.com");
   const std::string query =
-      Utils::buildQueryForDomain(domain, DnsRecordType::A, DnsRecordClass::IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
 
   sendQueryFromClient("10.0.0.1:1000", query);
 
@@ -769,6 +812,45 @@ TEST_F(DnsFilterTest, InvalidShortBufferTest) {
 
   ASSERT_EQ(0, config_->stats().a_record_queries_.value());
   ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, ExternalResolutionRetryTest) {
+  InSequence s;
+
+  const std::string expected_address("130.207.244.251");
+  const std::string query_host("www.foobaz.com");
+  setup(forward_query_on_config);
+
+  // Verify that we are calling the resolver with the expected name
+  Network::DnsResolver::ResolveCb resolve_cb;
+  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+      .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
+
+  const std::string query =
+      Utils::buildQueryForDomain(query_host, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
+  ASSERT_FALSE(query.empty());
+
+  // Send a query to for a name not in our configuration
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  // Execute resolve callback
+  resolve_cb(Network::DnsResolver::ResolutionStatus::Failure, TestUtility::makeDnsResponse({}));
+
+  // parse the result
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
+  ASSERT_EQ(DnsResponseCode::NameError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(0, query_ctx_->answers_.size());
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().downstream_rx_queries_.value());
+  ASSERT_EQ(1, config_->stats().external_a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().external_a_record_answers_.value());
+  ASSERT_EQ(1, config_->stats().a_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().aaaa_record_queries_.value());
+  ASSERT_EQ(0, config_->stats().unanswered_queries_.value());
+
+  EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
 
 } // namespace

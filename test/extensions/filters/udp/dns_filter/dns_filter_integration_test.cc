@@ -114,9 +114,8 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
 
   Network::UdpRecvData response;
-  std::string query = Utils::buildQueryForDomain(
-      "www.google.com", Extensions::UdpFilters::DnsFilter::DnsRecordType::A,
-      Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  std::string query =
+      Utils::buildQueryForDomain("www.google.com", DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
@@ -133,9 +132,8 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
 
   Network::UdpRecvData response;
-  std::string query = Utils::buildQueryForDomain(
-      "www.google.com", Extensions::UdpFilters::DnsFilter::DnsRecordType::AAAA,
-      Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  std::string query =
+      Utils::buildQueryForDomain("www.google.com", DNS_RECORD_TYPE_AAAA, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
@@ -152,9 +150,8 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
 
   Network::UdpRecvData response;
-  std::string query = Utils::buildQueryForDomain(
-      "www.foo1.com", Extensions::UdpFilters::DnsFilter::DnsRecordType::A,
-      Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  std::string query =
+      Utils::buildQueryForDomain("www.foo1.com", DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);
@@ -170,16 +167,15 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
   const auto listener_address = Network::Utility::resolveUrl(
       fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port));
 
-  Extensions::UdpFilters::DnsFilter::DnsRecordType record_type;
+  uint16_t record_type;
   if (listener_address->ip()->ipv6()) {
-    record_type = Extensions::UdpFilters::DnsFilter::DnsRecordType::AAAA;
+    record_type = DNS_RECORD_TYPE_AAAA;
   } else {
-    record_type = Extensions::UdpFilters::DnsFilter::DnsRecordType::A;
+    record_type = DNS_RECORD_TYPE_A;
   }
 
   Network::UdpRecvData response;
-  std::string query = Utils::buildQueryForDomain(
-      "cluster_0", record_type, Extensions::UdpFilters::DnsFilter::DnsRecordClass::IN);
+  std::string query = Utils::buildQueryForDomain("cluster_0", record_type, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response);

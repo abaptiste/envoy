@@ -22,18 +22,19 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
 
   envoy::data::dns::v3::DnsTable dns_table;
   bool result = loadServerConfig(server_config, dns_table);
-  ENVOY_LOG_MISC(debug, "Loading DNS table from external file: {}", result ? "Success" : "Failure");
+  ENVOY_LOG(debug, "Loading DNS table from external file: {}", result ? "Success" : "Failure");
+
+  retry_count_ = dns_table.external_retry_count();
 
   const size_t entries = dns_table.virtual_domains().size();
 
   virtual_domains_.reserve(entries);
   for (const auto& virtual_domain : dns_table.virtual_domains()) {
     AddressConstPtrVec addrs{};
-
     if (virtual_domain.endpoint().has_address_list()) {
       const auto& address_list = virtual_domain.endpoint().address_list().address();
       addrs.reserve(address_list.size());
-      // This will throw an exception if the configured_address string is malformed
+      // Creating the ipaddr will throw an exception if the address string is malformed
       for (const auto& address : address_list) {
         auto ipaddr = Network::Utility::parseInternetAddress(address, 0 /* port */);
         addrs.push_back(std::move(ipaddr));
@@ -80,14 +81,16 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
   }
 
   const auto& datasource = config.external_dns_table();
-  const auto external_dns_table = Config::DataSource::read(datasource, false, api_);
-  if (!external_dns_table.empty()) {
-    ENVOY_LOG_MISC(debug, "Loading DNS table from external file: {}. {} bytes",
-                   datasource.filename(), external_dns_table.size());
-    return Protobuf::TextFormat::ParseFromString(external_dns_table, &table);
+  const auto external_dns_table =
+      Config::DataSource::read(datasource, false /* allow_empty */, api_);
+  if (external_dns_table.empty()) {
+    ENVOY_LOG(debug, "Empty string returned from reading data aource");
+    return false;
   }
 
-  return false;
+  ENVOY_LOG(debug, "Loading DNS table from external file: {}. {} bytes", datasource.filename(),
+            external_dns_table.size());
+  return Protobuf::TextFormat::ParseFromString(external_dns_table, &table);
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
@@ -100,8 +103,17 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
 
   // This callback is executed when the dns resolution completes. At that time of a response by the
   // resolver, we build an answer record from each IP returned then send a response to the client
-  answer_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
-                            AddressConstPtrVec& iplist) -> void {
+  resolver_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
+                              AddressConstPtrVec& iplist) -> void {
+    if (context->retry_ &&
+        context->resolver_status_ != Network::DnsResolver::ResolutionStatus::Success) {
+      --context->retry_;
+      ENVOY_LOG(debug, "resolving name [{}] via external resolvers [retry {}]", query->name_,
+                context->retry_);
+      resolver_->resolveExternalQuery(std::move(context), query);
+      return;
+    }
+
     config_->stats().externally_resolved_queries_.inc();
 
     incrementExternalQueryTypeCount(query->type_);
@@ -114,7 +126,7 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
   };
 
   resolver_ = std::make_unique<DnsFilterResolver>(
-      answer_callback_, config->resolvers(), config->resolverTimeout(), listener_.dispatcher());
+      resolver_callback_, config->resolvers(), config->resolverTimeout(), listener_.dispatcher());
 }
 
 void DnsFilter::onData(Network::UdpRecvData& client_request) {
@@ -194,7 +206,7 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context
     }
 
     ENVOY_LOG(debug, "resolving name [{}] via external resolvers", query->name_);
-    resolver_->resolve_query(std::move(context), query);
+    resolver_->resolveExternalQuery(std::move(context), query.get());
 
     return DnsLookupResponseCode::External;
   }
