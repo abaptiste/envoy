@@ -69,8 +69,9 @@ message DnsTable {
   // Control how many times envoy makes an attempt to forward a query to an external server
   uint32 external_retry_count = 1;
 
-  // Fully qualified domain names for which Envoy will respond to queries
-  repeated DnsVirtualDomain virtual_domains = 2 [(validate.rules).repeated = {min_items: 1}];
+  // Fully qualified domain names for which Envoy will respond to queries.  By leaving this
+  // list empty, Envoy will forward all queries.
+  repeated DnsVirtualDomain virtual_domains = 2;
 
   // This field serves to help Envoy determine whether it can authoritatively answer a query
   // for a name matching a suffix in this list. If the query name does not match a suffix in
