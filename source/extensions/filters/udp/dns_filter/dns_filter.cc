@@ -11,6 +11,9 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
+static constexpr std::chrono::milliseconds DEFAULT_RESOLVER_TIMEOUT{500};
+static constexpr std::chrono::seconds DEFAULT_RESOLVER_TTL{300};
+
 DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig& config)
@@ -42,9 +45,9 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     }
     virtual_domains_.emplace(virtual_domain.name(), std::move(addrs));
 
-    uint64_t ttl = virtual_domain.has_answer_ttl()
-                       ? DurationUtil::durationToSeconds(virtual_domain.answer_ttl())
-                       : DefaultResolverTTLs;
+    std::chrono::seconds ttl = virtual_domain.has_answer_ttl()
+                                   ? std::chrono::seconds(virtual_domain.answer_ttl().seconds())
+                                   : DEFAULT_RESOLVER_TTL;
     domain_ttl_.emplace(virtual_domain.name(), ttl);
   }
 
@@ -64,8 +67,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       auto ipaddr = Network::Utility::parseInternetAddress(resolver, 0 /* port */);
       resolvers_.push_back(std::move(ipaddr));
     }
-    resolver_timeout_ms_ = std::chrono::milliseconds(
-        PROTOBUF_GET_MS_OR_DEFAULT(client_config, resolver_timeout, DefaultResolverTimeoutMs));
+    resolver_timeout_ = std::chrono::milliseconds(PROTOBUF_GET_MS_OR_DEFAULT(
+        client_config, resolver_timeout, DEFAULT_RESOLVER_TIMEOUT.count()));
   }
 }
 
@@ -97,10 +100,8 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
                      const DnsFilterEnvoyConfigSharedPtr& config)
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
-      message_parser_(std::make_unique<DnsMessageParser>(
-          config->forwardQueries(), listener_.dispatcher().timeSource(),
-          config_->stats().downstream_rx_query_latency_)) {
-
+      message_parser_(config->forwardQueries(), listener_.dispatcher().timeSource(),
+                      config_->stats().downstream_rx_query_latency_) {
   // This callback is executed when the dns resolution completes. At that time of a response by the
   // resolver, we build an answer record from each IP returned then send a response to the client
   resolver_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
@@ -120,7 +121,7 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     for (const auto& ip : iplist) {
       incrementExternalQueryTypeAnswerCount(query->type_);
       uint16_t ttl = getDomainTTL(query->name_);
-      message_parser_->buildDnsAnswerRecord(context, *query, ttl, std::move(ip));
+      message_parser_.buildDnsAnswerRecord(context, *query, ttl, std::move(ip));
     }
     sendDnsResponse(std::move(context));
   };
@@ -134,10 +135,8 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   config_->stats().downstream_rx_queries_.inc();
 
   // Parse the query, if it fails return an response to the client
-  DnsQueryContextPtr query_context = message_parser_->createQueryContext(client_request);
-
+  DnsQueryContextPtr query_context = message_parser_.createQueryContext(client_request);
   incrementQueryTypeCount(query_context->queries_);
-
   if (!query_context->parse_status_) {
     config_->stats().downstream_rx_invalid_queries_.inc();
     sendDnsResponse(std::move(query_context));
@@ -168,11 +167,9 @@ void DnsFilter::sendDnsResponse(DnsQueryContextPtr query_context) {
 
   // Serializes the generated response to the parsed query from the client. If there is a
   // parsing error or the incoming query is invalid, we will still generate a valid DNS response
-  message_parser_->buildResponseBuffer(query_context, response);
-
+  message_parser_.buildResponseBuffer(query_context, response);
   config_->stats().downstream_tx_responses_.inc();
   config_->stats().downstream_tx_bytes_.recordValue(response.length());
-
   Network::UdpSendData response_data{query_context->local_->ip(), *(query_context->peer_),
                                      response};
   listener_.send(response_data);
@@ -189,11 +186,9 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context
    * contains QDCOUNT (usually 1) entries.
    */
   for (const auto& query : context->queries_) {
-
     // Try to resolve the query locally. If forwarding the query externally is disabled we will
     // always attempt to resolve with the configured domains
     if (isKnownDomain(query->name_) || !config_->forwardQueries()) {
-
       // Determine whether the name is a cluster. Move on to the next query if successful
       if (resolveViaClusters(context, *query)) {
         continue;
@@ -224,9 +219,9 @@ uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
 
   uint32_t ttl;
   if (iter == domain_ttl_config.end()) {
-    ttl = static_cast<uint32_t>(DnsFilterEnvoyConfig::DefaultResolverTTLs);
+    ttl = static_cast<uint32_t>(DEFAULT_RESOLVER_TTL.count());
   } else {
-    ttl = static_cast<uint32_t>(iter->second);
+    ttl = static_cast<uint32_t>(iter->second.count());
   }
 
   return ttl;
@@ -249,7 +244,6 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
       return true;
     }
   }
-
   return false;
 }
 
@@ -269,7 +263,7 @@ bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRe
       ENVOY_LOG(debug, "using cluster host address {} for domain [{}]",
                 host->address()->ip()->addressAsString(), query.name_);
       incrementClusterQueryTypeAnswerCount(query.type_);
-      message_parser_->buildDnsAnswerRecord(context, query, ttl, host->address());
+      message_parser_.buildDnsAnswerRecord(context, query, ttl, host->address());
     }
   }
   return (discovered_endpoints != 0);
@@ -301,7 +295,7 @@ bool DnsFilter::resolveViaConfiguredHosts(DnsQueryContextPtr& context,
               configured_address->ip()->addressAsString(), query.name_);
     ++hosts_found;
     const uint32_t ttl = getDomainTTL(query.name_);
-    message_parser_->buildDnsAnswerRecord(context, query, ttl, configured_address);
+    message_parser_.buildDnsAnswerRecord(context, query, ttl, configured_address);
   }
   return (hosts_found != 0);
 }

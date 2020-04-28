@@ -83,7 +83,7 @@ inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   while (count != std::string::npos) {
 
     // Each segment or label is restricted to 63 bytes per RFC
-    if (count > MAXLABEL) {
+    if ((count - last) > MAXLABEL) {
       return false;
     }
 
@@ -121,24 +121,19 @@ inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
 
 // Serialize a DNS Query Record
 bool DnsQueryRecord::serialize(Buffer::OwnedImpl& output) {
-
   if (!serializeName(output)) {
     return false;
   }
-
   output.writeBEInt<uint16_t>(type_);
   output.writeBEInt<uint16_t>(class_);
-
   return true;
 }
 
 // Serialize a DNS Answer Record
 bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
-
   if (!serializeName(output)) {
     return false;
   }
-
   output.writeBEInt<uint16_t>(type_);
   output.writeBEInt<uint16_t>(class_);
   output.writeBEInt<uint32_t>(ttl_);
@@ -157,7 +152,6 @@ bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
     output.writeBEInt<uint16_t>(4);
     output.writeLEInt<uint32_t>(ip_address->ipv4()->address());
   }
-
   return true;
 }
 
@@ -166,25 +160,22 @@ DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& cl
       client_request.addresses_.local_, client_request.addresses_.peer_);
 
   query_context->parse_status_ = parseDnsObject(query_context, client_request.buffer_);
-
   if (!query_context->parse_status_) {
     query_context->response_code_ = DnsResponseCode::FormatError;
     ENVOY_LOG(error, "Unable to parse query buffer from '{}' into a DNS object",
               client_request.addresses_.peer_->ip()->addressAsString());
   }
-
   return query_context;
 }
 
 bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
                                       const Buffer::InstancePtr& buffer) {
-
   auto available_bytes = buffer->length();
 
   // TODO: Remove before pushing upstream
   dumpBuffer(__func__, buffer);
 
-  memset(&incoming_, 0x00, sizeof(incoming_));
+  memset(&header_, 0x00, sizeof(struct DnsHeader));
 
   static constexpr uint64_t field_size = sizeof(uint16_t);
   uint64_t offset = 0;
@@ -214,32 +205,32 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 
     switch (state_) {
     case DnsQueryParseState::Init:
-      incoming_.id = data;
+      header_.id = data;
       state_ = DnsQueryParseState::Flags;
       break;
 
     case DnsQueryParseState::Flags:
-      ::memcpy(static_cast<void*>(&incoming_.flags), &data, sizeof(uint16_t));
+      ::memcpy(static_cast<void*>(&header_.flags), &data, sizeof(uint16_t));
       state_ = DnsQueryParseState::Questions;
       break;
 
     case DnsQueryParseState::Questions:
-      incoming_.questions = data;
+      header_.questions = data;
       state_ = DnsQueryParseState::Answers;
       break;
 
     case DnsQueryParseState::Answers:
-      incoming_.answers = data;
+      header_.answers = data;
       state_ = DnsQueryParseState::Authority;
       break;
 
     case DnsQueryParseState::Authority:
-      incoming_.authority_rrs = data;
+      header_.authority_rrs = data;
       state_ = DnsQueryParseState::Authority2;
       break;
 
     case DnsQueryParseState::Authority2:
-      incoming_.additional_rrs = data;
+      header_.additional_rrs = data;
       state_ = DnsQueryParseState::Finish;
       break;
 
@@ -258,24 +249,24 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     return false;
   }
 
-  context->id_ = static_cast<uint16_t>(incoming_.id);
+  context->id_ = static_cast<uint16_t>(header_.id);
   if (context->id_ == 0) {
     ENVOY_LOG(debug, "No ID in query");
     return false;
   }
 
   // TODO: Remove before pushing upstream
-  dumpFlags(incoming_);
+  dumpFlags(header_);
 
-  if (incoming_.questions == 0) {
+  if (header_.questions == 0) {
     ENVOY_LOG(trace, "No questions in DNS request");
     return false;
   }
 
   // Almost always, we will have only one query here. Per the RFC, QDCOUNT is usually 1
-  context->queries_.reserve(incoming_.questions);
-  for (auto index = 0; index < incoming_.questions; index++) {
-    ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, incoming_.questions);
+  context->queries_.reserve(header_.questions);
+  for (auto index = 0; index < header_.questions; index++) {
+    ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, header_.questions);
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG(error, "Couldn't parse query record from buffer");
@@ -285,8 +276,8 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   }
 
   // Parse all answer records and store them.
-  for (auto index = 0; index < incoming_.answers; index++) {
-    ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, incoming_.answers);
+  for (auto index = 0; index < header_.answers; index++) {
+    ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, header_.answers);
     auto rec = parseDnsAnswerRecord(buffer, &offset);
     if (rec == nullptr) {
       ENVOY_LOG(error, "Couldn't parse answer record from buffer");
@@ -393,7 +384,6 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
     for (size_t index = 0; index < count; index++) {
       *address6_bytes++ = buffer->peekLEInt<uint8_t>(data_offset++);
     }
-
     ip_addr = std::make_shared<Network::Address::Ipv6Instance>(sa6, true);
   }
 
@@ -403,8 +393,8 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   *offset = data_offset;
 
-  return std::make_unique<DnsAnswerRecord>(/*static_cast<uint16_t>(incoming_.id), */ record_name,
-                                           record_type, record_class, ttl, std::move(ip_addr));
+  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl,
+                                           std::move(ip_addr));
 }
 
 DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -441,8 +431,7 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   record_class = buffer->peekBEInt<uint16_t>(name_offset);
   name_offset += sizeof(record_class);
 
-  auto rec = std::make_unique<DnsQueryRecord>(/*static_cast<uint16_t>(incoming_.id), */ record_name,
-                                              record_type, record_class);
+  auto rec = std::make_unique<DnsQueryRecord>(record_name, record_type, record_class);
   rec->query_time_ms_ = std::make_unique<Stats::HistogramCompletableTimespanImpl>(
       query_latency_histogram_, timesource_);
 
@@ -459,18 +448,18 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
                                            const uint16_t questions, const uint16_t answers) {
 
   // Copy the transaction ID
-  generated_.id = incoming_.id;
+  generated_.id = header_.id;
 
   // Signify that this is a response to a query
   generated_.flags.qr = 1;
 
-  generated_.flags.opcode = incoming_.flags.opcode;
+  generated_.flags.opcode = header_.flags.opcode;
 
   generated_.flags.aa = 0;
   generated_.flags.tc = 0;
 
   // Copy Recursion flags
-  generated_.flags.rd = incoming_.flags.rd;
+  generated_.flags.rd = header_.flags.rd;
 
   // Set the recursion flag based on whether Envoy is configured to forward queries
   generated_.flags.ra = recursion_available_;
@@ -502,7 +491,6 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
 void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
                                             const DnsQueryRecord& query_rec, const uint32_t ttl,
                                             Network::Address::InstanceConstSharedPtr ipaddr) {
-
   // Verify that we have an address matching the query record type
   switch (query_rec.type_) {
   case DNS_RECORD_TYPE_AAAA:
@@ -536,7 +524,6 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
 void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
                                        const uint16_t serialized_queries,
                                        const uint16_t serialized_answers) {
-
   // If the question is malformed, don't change the response
   if (context->response_code_ == DnsResponseCode::FormatError) {
     return;
@@ -572,8 +559,8 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes. If we support
   // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
   // mind.
-  static constexpr uint64_t max_dns_response_size{512};
-  static constexpr uint64_t max_dns_name_size{255};
+  static constexpr uint64_t MAX_DNS_RESPONSE_SIZE{512};
+  static constexpr uint64_t MAX_DNS_NAME_SIZE{255};
 
   // Each response must have DNS flags, which take 4 bytes. Account for them immediately so that we
   // can adjust the number of returned answers to remain under the limit
@@ -601,7 +588,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       // names, we should not end up with a non-conforming name here.
       //
       // See https://github.com/c-ares/c-ares/blob/master/ares_create_query.c#L191-L194
-      if (query->name_.size() > max_dns_name_size) {
+      if (query->name_.size() > MAX_DNS_NAME_SIZE) {
         ENVOY_LOG(
             error,
             "Query name '{}' is longer than the maximum permitted length. Skipping serialization",
@@ -620,7 +607,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       }
       const uint64_t serialized_answer_length = serialized_answer.length();
 
-      if ((total_buffer_size + serialized_answer_length) > max_dns_response_size) {
+      if ((total_buffer_size + serialized_answer_length) > MAX_DNS_RESPONSE_SIZE) {
         break;
       }
 

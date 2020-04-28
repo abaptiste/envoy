@@ -52,7 +52,7 @@ public:
   const std::string SniDynamicForwardProxy = "envoy.filters.network.sni_dynamic_forward_proxy";
   // ZooKeeper proxy filter
   const std::string ZooKeeperProxy = "envoy.filters.network.zookeeper_proxy";
-  // Dns Proxy Filter
+  // DNS Filter
   const std::string DnsFilter = "envoy.filters.network.dns_filter";
 };
 

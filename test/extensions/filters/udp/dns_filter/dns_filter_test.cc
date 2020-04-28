@@ -116,6 +116,7 @@ server_config:
     - suffix: foo1.com
     - suffix: foo2.com
     - suffix: foo3.com
+    - suffix: thisismydomainforafivehundredandtwelvebytetest.com
     virtual_domains:
     - name: "www.foo1.com"
       endpoint:
@@ -135,6 +136,18 @@ server_config:
         address_list:
           address:
           - 10.0.3.1
+    - name: supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com
+      endpoint:
+        address_list:
+          address:
+          - 2001:8a:c1::2801:0001
+          - 2001:8a:c1::2801:0002
+          - 2001:8a:c1::2801:0003
+          - 2001:8a:c1::2801:0004
+          - 2001:8a:c1::2801:0005
+          - 2001:8a:c1::2801:0006
+          - 2001:8a:c1::2801:0007
+          - 2001:8a:c1::2801:0008
 )EOF";
 
   const std::string forward_query_on_config = R"EOF(
@@ -207,13 +220,49 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
 }
 
+TEST_F(DnsFilterTest, MaxQueryAndResponseSizeTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  std::string domain(
+      "supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com");
+  const std::string query =
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_AAAA, DNS_RECORD_CLASS_IN);
+  ASSERT_FALSE(query.empty());
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  ASSERT_LT(udp_response_.buffer_->length(), Utils::MAX_UDP_DNS_SIZE);
+  query_ctx_ = response_parser_->createQueryContext(udp_response_);
+  ASSERT_TRUE(query_ctx_->parse_status_);
+
+  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
+  // There are 8 addreses, however, since the domain is part of the answer record, each
+  // serialized answer is over 100 bytes in size, there are only room for ~3 before the next
+  // serialized answer puts the buffer over the 512 byte limit. The query itself is also
+  // around 100 bytes.
+  ASSERT_EQ(3, query_ctx_->answers_.size());
+
+  // Validate stats
+  ASSERT_EQ(1, config_->stats().aaaa_record_queries_.value());
+
+  // Although there are only 3 answers returned, the filter did find 8 records for the query
+  ASSERT_EQ(8, config_->stats().local_aaaa_record_answers_.value());
+  ASSERT_EQ(0, config_->stats().downstream_rx_invalid_queries_.value());
+  ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
+  ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
+}
+
 TEST_F(DnsFilterTest, InvalidQueryNameTooLongTest) {
   InSequence s;
 
   setup(forward_query_off_config);
   std::string domain(256, 'a');
+  const std::string query =
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
+  ASSERT_FALSE(query.empty());
 
-  sendQueryFromClient("10.0.0.1:1000", domain);
+  sendQueryFromClient("10.0.0.1:1000", query);
 
   query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_FALSE(query_ctx_->parse_status_);
@@ -234,8 +283,11 @@ TEST_F(DnsFilterTest, InvalidLabelNameTooLongTest) {
   setup(forward_query_off_config);
   std::string domain(64, 'a');
   domain += ".com";
+  const std::string query =
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
+  ASSERT_FALSE(query.empty());
 
-  sendQueryFromClient("10.0.0.1:1000", domain);
+  sendQueryFromClient("10.0.0.1:1000", query);
 
   query_ctx_ = response_parser_->createQueryContext(udp_response_);
   ASSERT_FALSE(query_ctx_->parse_status_);

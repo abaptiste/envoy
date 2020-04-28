@@ -61,7 +61,7 @@ message DnsFilterConfig {
     // configuration correctly if this message field starts at 1 instead of 2.
     google.protobuf.Duration resolver_timeout = 2 [(validate.rules).duration = {gt {}}];
 
-    // Specify a list of DNS servers to which we can forward queries.  If no entries are
+    // Specify a list of DNS servers to which we can forward queries. If no entries are
     // provided, Envoy will use the system configured resolvers.
     repeated string upstream_resolvers = 3
         [(validate.rules).repeated = {items {string {min_len: 3}}}];

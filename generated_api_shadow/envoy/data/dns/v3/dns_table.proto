@@ -69,7 +69,7 @@ message DnsTable {
   // Control how many times envoy makes an attempt to forward a query to an external server
   uint32 external_retry_count = 1;
 
-  // Fully qualified domain names for which Envoy will respond to queries.  By leaving this
+  // Fully qualified domain names for which Envoy will respond to queries. By leaving this
   // list empty, Envoy will forward all queries.
   repeated DnsVirtualDomain virtual_domains = 2;
 

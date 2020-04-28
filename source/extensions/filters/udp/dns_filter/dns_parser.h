@@ -208,12 +208,12 @@ public:
   /**
    * @return uint16_t the response code flag value from a parsed dns object
    */
-  uint16_t getQueryResponseCode() { return static_cast<uint16_t>(incoming_.flags.rcode); }
+  uint16_t getQueryResponseCode() { return static_cast<uint16_t>(header_.flags.rcode); }
 
   /**
    * @return uint16_t the number of answer records in the parsed dns object
    */
-  uint16_t getAnswers() { return incoming_.answers; }
+  uint16_t getAnswers() { return header_.answers; }
 
   /**
    * @return uint16_t the response code flag value from a generated dns object
@@ -267,11 +267,9 @@ private:
                                        uint64_t* name_offset);
 
   bool recursion_available_;
-
   TimeSource& timesource_;
   Stats::Histogram& query_latency_histogram_;
-
-  struct DnsHeader incoming_;
+  struct DnsHeader header_;
   struct DnsHeader generated_;
 };
 

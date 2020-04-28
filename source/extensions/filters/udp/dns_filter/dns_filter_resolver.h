@@ -55,8 +55,8 @@ private:
   }
 
   /**
-   * Invoke the DNS Filter callback after explicitly clearing the resolved hosts list. The filter
-   * will respond appropriately.
+   * @brief Invoke the DNS Filter callback after explicitly clearing the resolved hosts list. The
+   * DNS Filter will respond to the client appropriately.
    */
   void onResolveTimeout() {
     // Guard against executing the filter callback and sending a response
@@ -70,17 +70,13 @@ private:
   }
 
   const Network::DnsResolverSharedPtr resolver_;
-
   DnsFilterResolverCallback& callback_;
   std::chrono::milliseconds timeout_;
   Event::TimerPtr timeout_timer_;
-
   const DnsQueryRecord* query_rec_;
   Network::ActiveDnsQuery* active_query_;
-
   DnsFilterResolverStatus resolution_status_;
   AddressConstPtrVec resolved_hosts_;
-
   DnsQueryContextPtr external_context_;
 };
 
