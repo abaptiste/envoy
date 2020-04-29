@@ -23,8 +23,8 @@ namespace Envoy {
 namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
-namespace {
 
+namespace {
 Api::IoCallUint64Result makeNoError(uint64_t rc) {
   auto no_error = Api::ioCallUint64ResultNoError();
   no_error.rc_ = rc;
@@ -136,7 +136,7 @@ server_config:
         address_list:
           address:
           - 10.0.3.1
-    - name: supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com
+    - name: www.supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com
       endpoint:
         address_list:
           address:
@@ -225,7 +225,7 @@ TEST_F(DnsFilterTest, MaxQueryAndResponseSizeTest) {
 
   setup(forward_query_off_config);
   std::string domain(
-      "supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com");
+      "www.supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com");
   const std::string query =
       Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_AAAA, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
@@ -237,7 +237,7 @@ TEST_F(DnsFilterTest, MaxQueryAndResponseSizeTest) {
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
-  // There are 8 addreses, however, since the domain is part of the answer record, each
+  // There are 8 addresses, however, since the domain is part of the answer record, each
   // serialized answer is over 100 bytes in size, there are only room for ~3 before the next
   // serialized answer puts the buffer over the 512 byte limit. The query itself is also
   // around 100 bytes.
@@ -257,7 +257,7 @@ TEST_F(DnsFilterTest, InvalidQueryNameTooLongTest) {
   InSequence s;
 
   setup(forward_query_off_config);
-  std::string domain(256, 'a');
+  std::string domain = "www." + std::string(256, 'a') + ".com";
   const std::string query =
       Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());

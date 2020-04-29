@@ -25,7 +25,6 @@ class BaseDnsRecord {
 public:
   BaseDnsRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
       : name_(rec_name), type_(rec_type), class_(rec_class) {}
-
   virtual ~BaseDnsRecord() = default;
   bool serializeName(Buffer::OwnedImpl& output);
   virtual bool serialize(Buffer::OwnedImpl& output) PURE;
@@ -43,8 +42,7 @@ class DnsQueryRecord : public BaseDnsRecord {
 public:
   DnsQueryRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
       : BaseDnsRecord(rec_name, rec_type, rec_class) {}
-
-  ~DnsQueryRecord() override = default;
+  ~DnsQueryRecord() = default;
   bool serialize(Buffer::OwnedImpl& output) override;
 
   std::unique_ptr<Stats::HistogramCompletableTimespanImpl> query_time_ms_;
@@ -64,12 +62,11 @@ public:
   DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
                   const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr)
       : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
-
-  ~DnsAnswerRecord() override = default;
+  ~DnsAnswerRecord() = default;
   bool serialize(Buffer::OwnedImpl& output) override;
 
   const uint32_t ttl_;
-  Network::Address::InstanceConstSharedPtr ip_addr_;
+  const Network::Address::InstanceConstSharedPtr ip_addr_;
 };
 
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
@@ -88,9 +85,8 @@ public:
         id_(), retry_(), resolver_status_() {}
   ~DnsQueryContext() = default;
 
-  Network::Address::InstanceConstSharedPtr local_;
-  Network::Address::InstanceConstSharedPtr peer_;
-
+  const Network::Address::InstanceConstSharedPtr local_;
+  const Network::Address::InstanceConstSharedPtr peer_;
   bool parse_status_;
   DnsResponseCode response_code_;
   uint16_t id_;
@@ -151,7 +147,6 @@ public:
   DnsMessageParser(bool recurse, TimeSource& timesource, Stats::Histogram& latency_histogram)
       : recursion_available_(recurse), timesource_(timesource),
         query_latency_histogram_(latency_histogram) {}
-  ~DnsMessageParser() = default;
 
   // TODO: Do not include this in the PR
   void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
@@ -228,13 +223,13 @@ public:
    */
   DnsQueryContextPtr createQueryContext(Network::UdpRecvData& client_request);
 
-private:
   /**
    * @param buffer a reference to the incoming request object received by the listener
    * @return bool true if all DNS records and flags were successfully parsed from the buffer
    */
   bool parseDnsObject(DnsQueryContextPtr& context, const Buffer::InstancePtr& buffer);
 
+private:
   /**
    * @brief sets the response code returned to the client
    *
@@ -272,8 +267,6 @@ private:
   struct DnsHeader header_;
   struct DnsHeader generated_;
 };
-
-using DnsMessageParserPtr = std::unique_ptr<DnsMessageParser>;
 
 } // namespace DnsFilter
 } // namespace UdpFilters
