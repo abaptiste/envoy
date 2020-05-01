@@ -24,7 +24,9 @@ public:
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
     response_parser_ = std::make_unique<DnsMessageParser>(true /*recursive queries */,
-                                                          api_->timeSource(), histogram_);
+                                                          api_->timeSource(), 
+                                                          0 /* retry_count */,
+                                                          histogram_);
   }
 
   static std::string configToUse() {
@@ -122,7 +124,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
@@ -140,7 +142,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
@@ -158,7 +160,7 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(4, query_ctx_->answers_.size());
-  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
@@ -182,7 +184,7 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(2, query_ctx_->answers_.size());
-  ASSERT_EQ(DnsResponseCode::NoError, response_parser_->getQueryResponseCode());
+  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 } // namespace

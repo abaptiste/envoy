@@ -101,7 +101,7 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
       message_parser_(config->forwardQueries(), listener_.dispatcher().timeSource(),
-                      config_->stats().downstream_rx_query_latency_) {
+                      config->retryCount(), config_->stats().downstream_rx_query_latency_) {
   // This callback is executed when the dns resolution completes. At that time of a response by the
   // resolver, we build an answer record from each IP returned then send a response to the client
   resolver_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
@@ -233,7 +233,7 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
   // If we don't have a list of whitelisted domain suffixes, we will resolve the name with an
   // external DNS server
   if (known_suffixes.empty()) {
-    ENVOY_LOG(trace, "Known domains list is empty");
+    ENVOY_LOG(debug, "Known domains list is empty");
     return false;
   }
 

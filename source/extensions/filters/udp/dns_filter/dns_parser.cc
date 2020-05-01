@@ -151,12 +151,12 @@ bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
 
 DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& client_request) {
   DnsQueryContextPtr query_context = std::make_unique<DnsQueryContext>(
-      client_request.addresses_.local_, client_request.addresses_.peer_);
+      client_request.addresses_.local_, client_request.addresses_.peer_, retry_count_);
 
   query_context->parse_status_ = parseDnsObject(query_context, client_request.buffer_);
   if (!query_context->parse_status_) {
-    query_context->response_code_ = DnsResponseCode::FormatError;
-    ENVOY_LOG(error, "Unable to parse query buffer from '{}' into a DNS object",
+    query_context->response_code_ = DNS_RESPONSE_CODE_FORMAT_ERROR;
+    ENVOY_LOG(debug, "Unable to parse query buffer from '{}' into a DNS object",
               client_request.addresses_.peer_->ip()->addressAsString());
   }
   return query_context;
@@ -180,7 +180,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   while (state != DnsQueryParseState::Finish) {
     // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
-      ENVOY_LOG(error,
+      ENVOY_LOG(debug,
                 "Exhausted available bytes in the buffer. Insufficient data to parse query field.");
       return false;
     }
@@ -191,7 +191,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     available_bytes -= field_size;
 
     if (offset > buffer->length()) {
-      ENVOY_LOG(error, "Buffer read offset [{}] is beyond buffer length [{}].", offset,
+      ENVOY_LOG(debug, "Buffer read offset [{}] is beyond buffer length [{}].", offset,
                 buffer->length());
       return false;
     }
@@ -237,7 +237,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 
   // Verify that we still have available data in the buffer to read answer and query records
   if (offset > buffer->length()) {
-    ENVOY_LOG(error, "Buffer read offset[{}] is larget than buffer length [{}].", offset,
+    ENVOY_LOG(debug, "Buffer read offset[{}] is larget than buffer length [{}].", offset,
               buffer->length());
     return false;
   }
@@ -252,7 +252,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   dumpFlags(header_);
 
   if (header_.questions == 0) {
-    ENVOY_LOG(trace, "No questions in DNS request");
+    ENVOY_LOG(debug, "No questions in DNS request");
     return false;
   }
 
@@ -262,7 +262,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, header_.questions);
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
-      ENVOY_LOG(trace, "Couldn't parse query record from buffer");
+      ENVOY_LOG(debug, "Couldn't parse query record from buffer");
       return false;
     }
     context->queries_.push_back(std::move(rec));
@@ -273,10 +273,10 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, header_.answers);
     auto rec = parseDnsAnswerRecord(buffer, &offset);
     if (rec == nullptr) {
-      ENVOY_LOG(trace, "Couldn't parse answer record from buffer");
+      ENVOY_LOG(debug, "Couldn't parse answer record from buffer");
       return false;
     }
-    std::string name = rec->name_;
+    const std::string name = rec->name_;
     context->answers_.emplace(name, std::move(rec));
   }
 
@@ -294,7 +294,7 @@ const std::string DnsMessageParser::parseDnsNameRecord(const Buffer::InstancePtr
 
   int result = ares_expand_name(record, linearized_data, buffer->length(), &output, &encoded_len);
   if (result != ARES_SUCCESS) {
-    ENVOY_LOG(trace, "Unable to expand name record from buffer. result [{}][ length [{}]", result,
+    ENVOY_LOG(debug, "Unable to expand name record from buffer. result [{}][ length [{}]", result,
               buffer->length());
     return EMPTY_STRING;
   }
@@ -314,25 +314,25 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
   uint64_t data_offset = *offset;
 
   if (data_offset > buffer->length()) {
-    ENVOY_LOG(trace, "Invalid offset for parsing answer record");
+    ENVOY_LOG(debug, "Invalid offset for parsing answer record");
     return nullptr;
   }
 
   uint64_t available_bytes = buffer->length() - data_offset;
 
   if (available_bytes == 0) {
-    ENVOY_LOG(trace, "No data left in buffer for reading answer record");
+    ENVOY_LOG(debug, "No data left in buffer for reading answer record");
     return nullptr;
   }
 
   const std::string record_name = parseDnsNameRecord(buffer, &available_bytes, &data_offset);
   if (record_name.empty()) {
-    ENVOY_LOG(error, "Unable to parse name record from buffer");
+    ENVOY_LOG(debug, "Unable to parse name record from buffer");
     return nullptr;
   }
 
   if (available_bytes < (sizeof(uint32_t) + 3 * sizeof(uint16_t))) {
-    ENVOY_LOG(error,
+    ENVOY_LOG(debug,
               "Insufficient data in buffer to read answer record data."
               "Available bytes: {}",
               available_bytes);
@@ -347,7 +347,7 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   // We support only A and AAAA record types
   if (record_type != DNS_RECORD_TYPE_A && record_type != DNS_RECORD_TYPE_AAAA) {
-    ENVOY_LOG(trace, "Unsupported record type [{}] found in answer", record_type);
+    ENVOY_LOG(debug, "Unsupported record type [{}] found in answer", record_type);
     return nullptr;
   }
 
@@ -359,7 +359,7 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   // We support only IN record classes
   if (record_class != DNS_RECORD_CLASS_IN) {
-    ENVOY_LOG(trace, "Unsupported record class [{}] found in answer", record_class);
+    ENVOY_LOG(debug, "Unsupported record class [{}] found in answer", record_class);
     return nullptr;
   }
 
@@ -376,7 +376,7 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
   available_bytes -= sizeof(uint16_t);
 
   if (data_length == 0) {
-    ENVOY_LOG(error, "Read zero for data length when reading address from answer record");
+    ENVOY_LOG(debug, "Read zero for data length when reading address from answer record");
     return nullptr;
   }
 
@@ -406,16 +406,16 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
     }
     break;
   default:
-    ENVOY_LOG(trace, "Unsupported record type [{}] found in answer", record_type);
+    ENVOY_LOG(debug, "Unsupported record type [{}] found in answer", record_type);
     break;
   }
 
   if (ip_addr == nullptr) {
-    ENVOY_LOG(error, "Unable to parse IP address from data in answer record");
+    ENVOY_LOG(debug, "Unable to parse IP address from data in answer record");
     return nullptr;
   }
 
-  ENVOY_LOG(debug, "Parsed address [{}] from record type [{}]: offset {}",
+  ENVOY_LOG(trace, "Parsed address [{}] from record type [{}]: offset {}",
             ip_addr->ip()->addressAsString(), record_type, data_offset);
 
   *offset = data_offset;
@@ -430,18 +430,18 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   uint64_t available_bytes = buffer->length() - name_offset;
 
   if (available_bytes == 0) {
-    ENVOY_LOG(error, "No available data in buffer to parse a query record");
+    ENVOY_LOG(debug, "No available data in buffer to parse a query record");
     return nullptr;
   }
 
   const std::string record_name = parseDnsNameRecord(buffer, &available_bytes, &name_offset);
   if (record_name.empty()) {
-    ENVOY_LOG(trace, "Unable to parse name record from buffer [length {}]", buffer->length());
+    ENVOY_LOG(debug, "Unable to parse name record from buffer [length {}]", buffer->length());
     return nullptr;
   }
 
   if (available_bytes < 2 * sizeof(uint16_t)) {
-    ENVOY_LOG(error,
+    ENVOY_LOG(debug,
               "Insufficient data in buffer to read query record type and class. "
               "Available bytes: {}",
               available_bytes);
@@ -473,7 +473,6 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
 
 void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
                                            const uint16_t questions, const uint16_t answers) {
-
   // Copy the transaction ID
   generated_.id = header_.id;
 
@@ -481,7 +480,6 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
   generated_.flags.qr = 1;
 
   generated_.flags.opcode = header_.flags.opcode;
-
   generated_.flags.aa = 0;
   generated_.flags.tc = 0;
 
@@ -498,13 +496,10 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
   generated_.flags.ad = 0;
 
   generated_.flags.cd = 0;
-
   generated_.answers = answers;
-
-  // The ID must be non-zero so that we can associate the response with the query
   generated_.flags.rcode = query_context->response_code_;
 
-  // Set the number of questions we are responding to
+  // Set the number of questions from the incoming query
   generated_.questions = questions;
 
   // We will not include any additional records
@@ -522,20 +517,20 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
   switch (query_rec.type_) {
   case DNS_RECORD_TYPE_AAAA:
     if (ipaddr->ip()->ipv6() == nullptr) {
-      ENVOY_LOG(error, "Unable to return IPV6 address for query");
+      ENVOY_LOG(debug, "Unable to return IPV6 address for query");
       return;
     }
     break;
 
   case DNS_RECORD_TYPE_A:
     if (ipaddr->ip()->ipv4() == nullptr) {
-      ENVOY_LOG(error, "Unable to return IPV4 address for query");
+      ENVOY_LOG(debug, "Unable to return IPV4 address for query");
       return;
     }
     break;
 
   default:
-    ENVOY_LOG(error, "record type [{}] not supported", query_rec.type_);
+    ENVOY_LOG(debug, "record type [{}] not supported", query_rec.type_);
     return;
   }
 
@@ -552,30 +547,26 @@ void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
                                        const uint16_t serialized_queries,
                                        const uint16_t serialized_answers) {
   // If the question is malformed, don't change the response
-  if (context->response_code_ == DnsResponseCode::FormatError) {
+  if (context->response_code_ == DNS_RESPONSE_CODE_FORMAT_ERROR) {
     return;
   }
-
   // Check for unsupported request types
   for (const auto& query : context->queries_) {
     if (query->type_ != DNS_RECORD_TYPE_A && query->type_ != DNS_RECORD_TYPE_AAAA) {
-      context->response_code_ = DnsResponseCode::NotImplemented;
+      context->response_code_ = DNS_RESPONSE_CODE_NOT_IMPLEMENTED;
       return;
     }
   }
-
   // Output validation
   if (serialized_queries == 0) {
-    context->response_code_ = DnsResponseCode::FormatError;
+    context->response_code_ = DNS_RESPONSE_CODE_FORMAT_ERROR;
     return;
   }
-
   if (serialized_answers == 0) {
-    context->response_code_ = DnsResponseCode::NameError;
+    context->response_code_ = DNS_RESPONSE_CODE_NAME_ERROR;
     return;
   }
-
-  context->response_code_ = DnsResponseCode::NoError;
+  context->response_code_ = DNS_RESPONSE_CODE_NO_ERROR;
 }
 
 void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
@@ -598,7 +589,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   Buffer::OwnedImpl query_buffer{};
   Buffer::OwnedImpl answer_buffer{};
 
-  ENVOY_LOG(debug, "Building response for query ID [{}]", query_context->id_);
+  ENVOY_LOG(trace, "Building response for query ID [{}]", query_context->id_);
 
   for (const auto& query : query_context->queries_) {
     // Serialize and account for each query
@@ -617,7 +608,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       // See https://github.com/c-ares/c-ares/blob/master/ares_create_query.c#L191-L194
       if (query->name_.size() > MAX_DNS_NAME_SIZE) {
         ENVOY_LOG(
-            error,
+            debug,
             "Query name '{}' is longer than the maximum permitted length. Skipping serialization",
             query->name_);
         continue;

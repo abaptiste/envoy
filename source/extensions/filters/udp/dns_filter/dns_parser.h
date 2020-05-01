@@ -18,6 +18,11 @@ constexpr uint16_t DNS_RECORD_CLASS_IN = 1;
 constexpr uint16_t DNS_RECORD_TYPE_A = 1;
 constexpr uint16_t DNS_RECORD_TYPE_AAAA = 28;
 
+constexpr uint16_t DNS_RESPONSE_CODE_NO_ERROR = 0;
+constexpr uint16_t DNS_RESPONSE_CODE_FORMAT_ERROR = 1;
+constexpr uint16_t DNS_RESPONSE_CODE_SERVER_FAILURE = 2;
+constexpr uint16_t DNS_RESPONSE_CODE_NAME_ERROR = 3;
+constexpr uint16_t DNS_RESPONSE_CODE_NOT_IMPLEMENTED = 4;
 /**
  * BaseDnsRecord contains the fields and functions common to both query and answer records.
  */
@@ -42,7 +47,6 @@ class DnsQueryRecord : public BaseDnsRecord {
 public:
   DnsQueryRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
       : BaseDnsRecord(rec_name, rec_type, rec_class) {}
-  ~DnsQueryRecord() = default;
   bool serialize(Buffer::OwnedImpl& output) override;
 
   std::unique_ptr<Stats::HistogramCompletableTimespanImpl> query_time_ms_;
@@ -62,7 +66,6 @@ public:
   DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
                   const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr)
       : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
-  ~DnsAnswerRecord() = default;
   bool serialize(Buffer::OwnedImpl& output) override;
 
   const uint32_t ttl_;
@@ -72,25 +75,22 @@ public:
 using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
 
-enum DnsResponseCode { NoError, FormatError, ServerFailure, NameError, NotImplemented };
-
 /**
  * DnsQueryContext contains all the data necessary for responding to a query from a given client.
  */
 class DnsQueryContext {
 public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
-                  Network::Address::InstanceConstSharedPtr peer)
-      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false), response_code_(),
-        id_(), retry_(), resolver_status_() {}
-  ~DnsQueryContext() = default;
+                  Network::Address::InstanceConstSharedPtr peer, uint64_t retry_count)
+      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false),
+        response_code_(DNS_RESPONSE_CODE_NO_ERROR), retry_(retry_count) {}
 
   const Network::Address::InstanceConstSharedPtr local_;
   const Network::Address::InstanceConstSharedPtr peer_;
   bool parse_status_;
-  DnsResponseCode response_code_;
+  uint16_t response_code_;
+  uint64_t retry_;
   uint16_t id_;
-  uint32_t retry_;
   Network::DnsResolver::ResolutionStatus resolver_status_;
   DnsQueryPtrVec queries_;
   DnsAnswerMap answers_;
@@ -100,21 +100,21 @@ using DnsQueryContextPtr = std::unique_ptr<DnsQueryContext>;
 using DnsFilterResolverCallback = std::function<void(
     DnsQueryContextPtr context, const DnsQueryRecord* current_query, AddressConstPtrVec& ipaddr)>;
 
-enum class DnsQueryParseState {
-  Init = 0,
-  Flags,      // 2 bytes
-  Questions,  // 2 bytes
-  Answers,    // 2 bytes
-  Authority,  // 2 bytes
-  Authority2, // 2 bytes
-  Finish
-};
-
 /**
  * This class orchestrates parsing a DNS query and building the response to be sent to a client.
  */
 class DnsMessageParser : public Logger::Loggable<Logger::Id::filter> {
 public:
+  enum class DnsQueryParseState {
+    Init,
+    Flags,      // 2 bytes
+    Questions,  // 2 bytes
+    Answers,    // 2 bytes
+    Authority,  // 2 bytes
+    Authority2, // 2 bytes
+    Finish
+  };
+
   // The flags have been verified with dig and this structure should not be modified. The flag order
   // here does not match the RFC, but takes byte ordering into account so that serialization does
   // not bitwise operations.
@@ -144,8 +144,9 @@ public:
     uint16_t additional_rrs;
   });
 
-  DnsMessageParser(bool recurse, TimeSource& timesource, Stats::Histogram& latency_histogram)
-      : recursion_available_(recurse), timesource_(timesource),
+  DnsMessageParser(bool recurse, TimeSource& timesource, uint64_t retry_count,
+                   Stats::Histogram& latency_histogram)
+      : recursion_available_(recurse), timesource_(timesource), retry_count_(retry_count),
         query_latency_histogram_(latency_histogram) {}
 
   // TODO: Do not include this in the PR
@@ -263,6 +264,7 @@ private:
 
   bool recursion_available_;
   TimeSource& timesource_;
+  uint64_t retry_count_;
   Stats::Histogram& query_latency_histogram_;
   struct DnsHeader header_;
   struct DnsHeader generated_;

@@ -33,8 +33,8 @@ void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
     lookup_family = Network::DnsLookupFamily::V6Only;
     break;
   default:
-    ENVOY_LOG(error, "Unknown query type [{}] for upstream lookup", domain_query->type_);
-    invokeCallback(Network::DnsResolver::ResolutionStatus::Failure);
+    // We should not get here.  Have the resolver try V6 and fallback to V4 resolution.
+    lookup_family = Network::DnsLookupFamily::Auto;
     return;
   }
 
@@ -62,7 +62,8 @@ void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
     if (status == Network::DnsResolver::ResolutionStatus::Success) {
       for (const auto resp : response) {
         ASSERT(resp.address_ != nullptr);
-        ENVOY_LOG(trace, "Received address: {}", resp.address_->ip()->addressAsString());
+        ENVOY_LOG(trace, "Resolved address: {} for {}",
+                  resp.address_->ip()->addressAsString(), query_rec_->name_);
         resolved_hosts_.push_back(std::move(resp.address_));
       }
     }
