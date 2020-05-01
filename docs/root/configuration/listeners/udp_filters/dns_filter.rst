@@ -75,11 +75,9 @@ matching records for the query type, each configured address is returned. This i
 AAAA records. Only A and AAAA records are supported. If the filter parses other queries for other
 record types, the filter immediately responds indicating that the query is not supported.
 
-
-The filter can also consume its configuration from an external dns table. The same configuration
-that appears in the static configuration can be stored in a Proto3-conformant JSON file and
-referenced in the configuration using the :ref:`external_dns_table DataSource <envoy_api_msg_core.DataSource>`
-directive:
+The filter can also consume its domain configuration from an external dns table. The same entities
+appearing in the static configuration can be stored as JSON or YAML in a separate file and referenced
+using the :ref:`external_dns_table DataSource <envoy_api_msg_core.DataSource>` directive:
 
 Example External DnsTable Configuration
 ---------------------------------------
@@ -100,30 +98,32 @@ In the file, the table can be defined as follows:
 DnsTable JSON Configuration
 ---------------------------
 
-.. code-block:: text
+.. code-block:: json
 
-  known_suffixes: [
-    { suffix: "suffix1.com" },
-    { suffix: "suffix2.com" }
-  ],
-  virtual_domains: [
-    {
-      name: "www.suffix1.com",
-      endpoint: {
-        address_list: {
-          address: [ "10.0.0.1", "10.0.0.2" ]
+  {
+    "known_suffixes": [
+      { "suffix": "suffix1.com" },
+      { "suffix": "suffix2.com" }
+    ],
+    "virtual_domains": [
+      {
+        "name": "www.suffix1.com",
+        "endpoint": {
+          "address_list": {
+            "address": [ "10.0.0.1", "10.0.0.2" ]
+          }
+        }
+      },
+      {
+        "name": "www.suffix2.com",
+        "endpoint": {
+          "address_list": {
+            "address": [ "2001:8a:c1::2800:7" ]
+          }
         }
       }
-    },
-    {
-      name: "www.suffix2.com",
-      endpoint: {
-        address_list: {
-          address: [ "2001:8a:c1::2800:7" ]
-        }
-      }
-    }
-  ]
+    ]
+  }
 
 
 By utilizing this configuration, the DNS responses can be configured separately from the Envoy

@@ -23,6 +23,7 @@ constexpr uint16_t DNS_RESPONSE_CODE_FORMAT_ERROR = 1;
 constexpr uint16_t DNS_RESPONSE_CODE_SERVER_FAILURE = 2;
 constexpr uint16_t DNS_RESPONSE_CODE_NAME_ERROR = 3;
 constexpr uint16_t DNS_RESPONSE_CODE_NOT_IMPLEMENTED = 4;
+
 /**
  * BaseDnsRecord contains the fields and functions common to both query and answer records.
  */
@@ -76,17 +77,27 @@ using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
 
 /**
+ * @brief This struct is used to hold pointers to the counters that are relevant to the
+ * parser. This is done to prevent dependency loops between the parser and filter headers
+ */
+struct DnsParserCounters {
+  Stats::Counter* underflow_counter;
+};
+
+/**
  * DnsQueryContext contains all the data necessary for responding to a query from a given client.
  */
 class DnsQueryContext {
 public:
   DnsQueryContext(Network::Address::InstanceConstSharedPtr local,
-                  Network::Address::InstanceConstSharedPtr peer, uint64_t retry_count)
-      : local_(std::move(local)), peer_(std::move(peer)), parse_status_(false),
+                  Network::Address::InstanceConstSharedPtr peer, DnsParserCounters& counters,
+                  uint64_t retry_count)
+      : local_(std::move(local)), peer_(std::move(peer)), counters_(counters), parse_status_(false),
         response_code_(DNS_RESPONSE_CODE_NO_ERROR), retry_(retry_count) {}
 
   const Network::Address::InstanceConstSharedPtr local_;
   const Network::Address::InstanceConstSharedPtr peer_;
+  DnsParserCounters& counters_;
   bool parse_status_;
   uint16_t response_code_;
   uint64_t retry_;
@@ -222,8 +233,8 @@ public:
    * @param client_request a structure containing addressing information and the buffer received
    * from a client
    */
-  DnsQueryContextPtr createQueryContext(Network::UdpRecvData& client_request);
-
+  DnsQueryContextPtr createQueryContext(Network::UdpRecvData& client_request,
+                                        DnsParserCounters& counters);
   /**
    * @param buffer a reference to the incoming request object received by the listener
    * @return bool true if all DNS records and flags were successfully parsed from the buffer
@@ -266,8 +277,8 @@ private:
   TimeSource& timesource_;
   uint64_t retry_count_;
   Stats::Histogram& query_latency_histogram_;
-  struct DnsHeader header_;
-  struct DnsHeader generated_;
+  DnsHeader header_;
+  DnsHeader generated_;
 };
 
 } // namespace DnsFilter

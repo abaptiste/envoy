@@ -46,6 +46,7 @@ namespace DnsFilter {
   COUNTER(unanswered_queries)                                                                      \
   COUNTER(unsupported_queries)                                                                     \
   COUNTER(downstream_tx_responses)                                                                 \
+  COUNTER(query_buffer_underflow)                                                                  \
   HISTOGRAM(downstream_rx_bytes, Bytes)                                                            \
   HISTOGRAM(downstream_rx_query_latency, Milliseconds)                                             \
   HISTOGRAM(downstream_tx_bytes, Bytes)

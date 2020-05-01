@@ -5,6 +5,7 @@
 
 #include "common/config/datasource.h"
 #include "common/network/address_impl.h"
+#include "common/protobuf/message_validator_impl.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -93,7 +94,22 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
 
   ENVOY_LOG(debug, "Loading DNS table from external file: {}. {} bytes", datasource.filename(),
             external_dns_table.size());
-  return Protobuf::TextFormat::ParseFromString(external_dns_table, &table);
+
+  bool data_source_loaded = false;
+  try {
+    // Data structure is deduced from the file extension. If the data is not read an exception
+    // is thrown. If no table can be read, the filter will refer all queries to an external
+    // DNS server, if configured, otherwise all queries will be responded to with Name Error.
+    MessageUtil::loadFromFile(datasource.filename(), table,
+                              ProtobufMessage::getNullValidationVisitor(), api_,
+                              false /* do_boosting */);
+    data_source_loaded = true;
+  } catch (const ProtobufMessage::UnknownProtoFieldException& e) {
+    ENVOY_LOG(warn, "Invalid field in datasource configuration: {}", e.what());
+  } catch (const EnvoyException& e) {
+    ENVOY_LOG(warn, "Filesystem config update failure: {}", e.what());
+  }
+  return data_source_loaded;
 }
 
 DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
@@ -134,8 +150,13 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   config_->stats().downstream_rx_bytes_.recordValue(client_request.buffer_->length());
   config_->stats().downstream_rx_queries_.inc();
 
+  // Setup counters for the parser
+  DnsParserCounters parser_counters;
+  parser_counters.underflow_counter = &config_->stats().query_buffer_underflow_;
+
   // Parse the query, if it fails return an response to the client
-  DnsQueryContextPtr query_context = message_parser_.createQueryContext(client_request);
+  DnsQueryContextPtr query_context =
+      message_parser_.createQueryContext(client_request, parser_counters);
   incrementQueryTypeCount(query_context->queries_);
   if (!query_context->parse_status_) {
     config_->stats().downstream_rx_invalid_queries_.inc();

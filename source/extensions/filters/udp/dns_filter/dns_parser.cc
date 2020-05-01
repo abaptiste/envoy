@@ -63,9 +63,9 @@ inline void DnsMessageParser::dumpFlags(const struct DnsHeader& query) {
 }
 
 inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
-  static constexpr char SEPARATOR{'.'};
-  static constexpr uint64_t MAX_LABEL_LENGTH{63};
-  static constexpr uint64_t MAX_NAME_LENGTH{255};
+  static constexpr char SEPARATOR = '.';
+  static constexpr size_t MAX_LABEL_LENGTH = 63;
+  static constexpr size_t MAX_NAME_LENGTH = 255;
 
   // Names are restricted to 255 bytes per RFC
   if (name_.size() > MAX_NAME_LENGTH) {
@@ -115,43 +115,44 @@ inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
 
 // Serialize a DNS Query Record
 bool DnsQueryRecord::serialize(Buffer::OwnedImpl& output) {
-  if (!serializeName(output)) {
-    return false;
+  if (serializeName(output)) {
+    output.writeBEInt<uint16_t>(type_);
+    output.writeBEInt<uint16_t>(class_);
+    return true;
   }
-  output.writeBEInt<uint16_t>(type_);
-  output.writeBEInt<uint16_t>(class_);
-  return true;
+  return false;
 }
 
 // Serialize a DNS Answer Record
 bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
-  if (!serializeName(output)) {
-    return false;
-  }
-  output.writeBEInt<uint16_t>(type_);
-  output.writeBEInt<uint16_t>(class_);
-  output.writeBEInt<uint32_t>(ttl_);
+  if (serializeName(output)) {
+    output.writeBEInt<uint16_t>(type_);
+    output.writeBEInt<uint16_t>(class_);
+    output.writeBEInt<uint32_t>(ttl_);
 
-  ASSERT(ip_addr_ != nullptr);
-  const auto ip_address = ip_addr_->ip();
+    ASSERT(ip_addr_ != nullptr);
+    const auto ip_address = ip_addr_->ip();
 
-  ASSERT(ip_address != nullptr);
-  if (ip_address->ipv6() != nullptr) {
-    // Store the 128bit address with 2 64 bit writes
-    const absl::uint128 addr6 = ip_address->ipv6()->address();
-    output.writeBEInt<uint16_t>(sizeof(addr6));
-    output.writeLEInt<uint64_t>(absl::Uint128Low64(addr6));
-    output.writeLEInt<uint64_t>(absl::Uint128High64(addr6));
-  } else if (ip_address->ipv4() != nullptr) {
-    output.writeBEInt<uint16_t>(4);
-    output.writeLEInt<uint32_t>(ip_address->ipv4()->address());
+    ASSERT(ip_address != nullptr);
+    if (ip_address->ipv6() != nullptr) {
+      // Store the 128bit address with 2 64 bit writes
+      const absl::uint128 addr6 = ip_address->ipv6()->address();
+      output.writeBEInt<uint16_t>(sizeof(addr6));
+      output.writeLEInt<uint64_t>(absl::Uint128Low64(addr6));
+      output.writeLEInt<uint64_t>(absl::Uint128High64(addr6));
+    } else if (ip_address->ipv4() != nullptr) {
+      output.writeBEInt<uint16_t>(4);
+      output.writeLEInt<uint32_t>(ip_address->ipv4()->address());
+    }
+    return true;
   }
-  return true;
+  return false;
 }
 
-DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& client_request) {
+DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& client_request,
+                                                        DnsParserCounters& counters) {
   DnsQueryContextPtr query_context = std::make_unique<DnsQueryContext>(
-      client_request.addresses_.local_, client_request.addresses_.peer_, retry_count_);
+      client_request.addresses_.local_, client_request.addresses_.peer_, counters, retry_count_);
 
   query_context->parse_status_ = parseDnsObject(query_context, client_request.buffer_);
   if (!query_context->parse_status_) {
@@ -164,22 +165,22 @@ DnsQueryContextPtr DnsMessageParser::createQueryContext(Network::UdpRecvData& cl
 
 bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
                                       const Buffer::InstancePtr& buffer) {
-  auto available_bytes = buffer->length();
-
   // TODO: Remove before pushing upstream
   dumpBuffer(__func__, buffer);
 
-  memset(&header_, 0x00, sizeof(struct DnsHeader));
-
   static constexpr uint64_t field_size = sizeof(uint16_t);
+  size_t available_bytes = buffer->length();
   uint64_t offset = 0;
   uint16_t data;
-
   DnsQueryParseState state{DnsQueryParseState::Init};
 
+  header_ = {};
   while (state != DnsQueryParseState::Finish) {
     // Ensure that we have enough data remaining in the buffer to parse the query
     if (available_bytes < field_size) {
+      if (context->counters_.underflow_counter) {
+        context->counters_.underflow_counter->inc();
+      }
       ENVOY_LOG(debug,
                 "Exhausted available bytes in the buffer. Insufficient data to parse query field.");
       return false;
@@ -229,9 +230,6 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 
     case DnsQueryParseState::Finish:
       break;
-
-    default:
-      NOT_REACHED_GCOVR_EXCL_LINE;
     }
   }
 
@@ -534,11 +532,9 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
     return;
   }
 
-  // The answer record could contain types other than IP's. We will support only IP addresses for
-  // the moment
-  auto answer_record = std::make_unique<DnsAnswerRecord>(
-      /*query_rec.id_, */ query_rec.name_, query_rec.type_, query_rec.class_, ttl,
-      std::move(ipaddr));
+  // The answer record could contain types other than IP's. We only support IP addresses
+  auto answer_record = std::make_unique<DnsAnswerRecord>(query_rec.name_, query_rec.type_,
+                                                         query_rec.class_, ttl, std::move(ipaddr));
 
   context->answers_.emplace(query_rec.name_, std::move(answer_record));
 }
@@ -577,8 +573,8 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes. If we support
   // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
   // mind.
-  static constexpr uint64_t MAX_DNS_RESPONSE_SIZE{512};
-  static constexpr uint64_t MAX_DNS_NAME_SIZE{255};
+  static constexpr uint64_t MAX_DNS_RESPONSE_SIZE = 512;
+  static constexpr uint64_t MAX_DNS_NAME_SIZE = 255;
 
   // Each response must have DNS flags, which take 4 bytes. Account for them immediately so that we
   // can adjust the number of returned answers to remain under the limit
@@ -592,12 +588,12 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   ENVOY_LOG(trace, "Building response for query ID [{}]", query_context->id_);
 
   for (const auto& query : query_context->queries_) {
-    // Serialize and account for each query
     if (!query->serialize(query_buffer)) {
       ENVOY_LOG(debug, "Unable to serialize query record for {}", query->name_);
       continue;
     }
 
+    // Serialize and account for each query's size. That said, there should be only one query.
     ++serialized_queries;
     total_buffer_size += query_buffer.length();
 
@@ -605,7 +601,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       // Query names are limited to 255 characters. Since we are using ares to decode the encoded
       // names, we should not end up with a non-conforming name here.
       //
-      // See https://github.com/c-ares/c-ares/blob/master/ares_create_query.c#L191-L194
+      // See Section 2.3.4 of https://tools.ietf.org/html/rfc1035
       if (query->name_.size() > MAX_DNS_NAME_SIZE) {
         ENVOY_LOG(
             debug,

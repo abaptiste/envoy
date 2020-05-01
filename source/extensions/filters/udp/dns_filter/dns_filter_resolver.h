@@ -25,8 +25,6 @@ public:
         timeout_timer_(dispatcher.createTimer([this]() -> void { onResolveTimeout(); })),
         active_query_(nullptr) {}
 
-  ~DnsFilterResolver() = default;
-
   /**
    * @brief entry point to resolve the name in a DnsQueryRecord
    *

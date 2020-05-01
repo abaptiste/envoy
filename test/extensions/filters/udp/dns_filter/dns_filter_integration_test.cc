@@ -23,10 +23,8 @@ public:
 
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
-    response_parser_ = std::make_unique<DnsMessageParser>(true /*recursive queries */,
-                                                          api_->timeSource(), 
-                                                          0 /* retry_count */,
-                                                          histogram_);
+    response_parser_ = std::make_unique<DnsMessageParser>(
+        true /*recursive queries */, api_->timeSource(), 0 /* retry_count */, histogram_);
   }
 
   static std::string configToUse() {
@@ -80,9 +78,6 @@ public:
     BaseIntegrationTest::initialize();
   }
 
-  /**
-   *  Destructor for an individual test.
-   */
   void TearDown() override {
     test_server_.reset();
     fake_upstreams_.clear();
@@ -91,16 +86,14 @@ public:
   void requestResponseWithListenerAddress(const Network::Address::Instance& listener_address,
                                           const std::string& data_to_send,
                                           Network::UdpRecvData& response_datagram) {
-    // Send datagram to be proxied.
     Network::Test::UdpSyncPeer client(version_);
     client.write(data_to_send, listener_address);
-
-    // Read the response
     client.recv(response_datagram);
   }
 
   Api::ApiPtr api_;
   NiceMock<Stats::MockHistogram> histogram_;
+  DnsParserCounters counters_;
   std::unique_ptr<DnsMessageParser> response_parser_;
   DnsQueryContextPtr query_ctx_;
 };
@@ -120,7 +113,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
       Utils::buildQueryForDomain("www.google.com", DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  query_ctx_ = response_parser_->createQueryContext(response);
+  query_ctx_ = response_parser_->createQueryContext(response, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
@@ -138,7 +131,7 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
       Utils::buildQueryForDomain("www.google.com", DNS_RECORD_TYPE_AAAA, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  query_ctx_ = response_parser_->createQueryContext(response);
+  query_ctx_ = response_parser_->createQueryContext(response, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(1, query_ctx_->answers_.size());
@@ -156,7 +149,7 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
       Utils::buildQueryForDomain("www.foo1.com", DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  query_ctx_ = response_parser_->createQueryContext(response);
+  query_ctx_ = response_parser_->createQueryContext(response, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(4, query_ctx_->answers_.size());
@@ -180,7 +173,7 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
   std::string query = Utils::buildQueryForDomain("cluster_0", record_type, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  query_ctx_ = response_parser_->createQueryContext(response);
+  query_ctx_ = response_parser_->createQueryContext(response, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(2, query_ctx_->answers_.size());

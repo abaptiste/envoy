@@ -13,7 +13,6 @@ void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
     active_query_->cancel();
     active_query_ = nullptr;
   }
-
   external_context_ = std::move(context);
 
   // Because the context can have more than one query, we need to maintain a pointer to the current
@@ -33,8 +32,8 @@ void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
     lookup_family = Network::DnsLookupFamily::V6Only;
     break;
   default:
-    // We should not get here.  Have the resolver try V6 and fallback to V4 resolution.
-    lookup_family = Network::DnsLookupFamily::Auto;
+    ENVOY_LOG(debug, "Unknown query type [{}] for upstream lookup", domain_query->type_);
+    invokeCallback(Network::DnsResolver::ResolutionStatus::Failure);
     return;
   }
 
@@ -45,29 +44,24 @@ void DnsFilterResolver::resolveExternalQuery(DnsQueryContextPtr context,
   auto resolve_cb = [this](Network::DnsResolver::ResolutionStatus status,
                            std::list<Network::DnsResponse>&& response) -> void {
     active_query_ = nullptr;
-
     ENVOY_LOG(trace, "async query status returned. Entries {}", response.size());
-
     if (resolution_status_ != DnsFilterResolverStatus::Pending) {
       ENVOY_LOG(debug, "Resolution timed out before callback was executed");
       return;
     }
-
     resolution_status_ = DnsFilterResolverStatus::Complete;
-
     // We are processing the response here, so we did not timeout. Cancel the timer
     timeout_timer_->disableTimer();
 
     // C-ares doesn't expose the TTL in the data available here.
     if (status == Network::DnsResolver::ResolutionStatus::Success) {
-      for (const auto resp : response) {
+      for (const auto& resp : response) {
         ASSERT(resp.address_ != nullptr);
-        ENVOY_LOG(trace, "Resolved address: {} for {}",
-                  resp.address_->ip()->addressAsString(), query_rec_->name_);
+        ENVOY_LOG(trace, "Resolved address: {} for {}", resp.address_->ip()->addressAsString(),
+                  query_rec_->name_);
         resolved_hosts_.push_back(std::move(resp.address_));
       }
     }
-
     // Invoke the filter callback notifying it of resolved addresses
     invokeCallback(status);
   };
