@@ -19,7 +19,7 @@ namespace {
 
 DEFINE_FUZZER(const uint8_t* buf, size_t len) {
   Logger::Registry::setLogLevel(TestEnvironment::getOptions().logLevel());
-  DnsParserCounters counters;
+  DnsParserCounters counters{};
   NiceMock<Stats::MockHistogram> histogram;
   histogram.unit_ = Stats::Histogram::Unit::Milliseconds;
   Api::ApiPtr api = Api::createApiForTest();

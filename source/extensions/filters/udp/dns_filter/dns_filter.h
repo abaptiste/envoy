@@ -133,6 +133,8 @@ public:
 private:
   /**
    * Prepare the response buffer and send it to the client
+   *
+   * @param context contains the data necessary to create a response and send it to a client
    */
   void sendDnsResponse(DnsQueryContextPtr context);
 

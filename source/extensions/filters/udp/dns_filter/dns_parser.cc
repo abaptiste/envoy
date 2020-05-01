@@ -62,7 +62,7 @@ inline void DnsMessageParser::dumpFlags(const struct DnsHeader& query) {
   ENVOY_LOG(trace, "{}", message);
 }
 
-inline bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
+bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   static constexpr char SEPARATOR = '.';
   static constexpr size_t MAX_LABEL_LENGTH = 63;
   static constexpr size_t MAX_NAME_LENGTH = 255;
@@ -233,6 +233,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     }
   }
 
+  // TODO(abaptiste):  Verify that queries do not contain answer records
   // Verify that we still have available data in the buffer to read answer and query records
   if (offset > buffer->length()) {
     ENVOY_LOG(debug, "Buffer read offset[{}] is larget than buffer length [{}].", offset,
@@ -285,15 +286,13 @@ const std::string DnsMessageParser::parseDnsNameRecord(const Buffer::InstancePtr
                                                        uint64_t* available_bytes,
                                                        uint64_t* name_offset) {
   void* buf = buffer->linearize(static_cast<uint32_t>(buffer->length()));
-  const unsigned char* linearized_data = static_cast<unsigned char*>(buf);
+  const unsigned char* linearized_data = static_cast<const unsigned char*>(buf);
   const unsigned char* record = linearized_data + *name_offset;
   long encoded_len;
   char* output;
 
   int result = ares_expand_name(record, linearized_data, buffer->length(), &output, &encoded_len);
   if (result != ARES_SUCCESS) {
-    ENVOY_LOG(debug, "Unable to expand name record from buffer. result [{}][ length [{}]", result,
-              buffer->length());
     return EMPTY_STRING;
   }
 
@@ -420,7 +419,7 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl,
                                            std::move(ip_addr));
-} // namespace DnsFilter
+}
 
 DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
                                                         uint64_t* offset) {
@@ -571,12 +570,12 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   // DNS extension fields
   //
   // Note:  There is Network::MAX_UDP_PACKET_SIZE, which is defined as 1500 bytes. If we support
-  // DNS extensions that support up to 4096 bytes, we will have to keep this 1500 byte limit in
+  // DNS extensions, which support up to 4096 bytes, we will have to keep this 1500 byte limit in
   // mind.
   static constexpr uint64_t MAX_DNS_RESPONSE_SIZE = 512;
   static constexpr uint64_t MAX_DNS_NAME_SIZE = 255;
 
-  // Each response must have DNS flags, which take 4 bytes. Account for them immediately so that we
+  // Each response must have DNS flags, which spans 4 bytes. Account for them immediately so that we
   // can adjust the number of returned answers to remain under the limit
   uint64_t total_buffer_size = 4;
   uint16_t serialized_answers = 0;

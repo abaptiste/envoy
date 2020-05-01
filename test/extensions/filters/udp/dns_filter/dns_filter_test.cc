@@ -23,8 +23,8 @@ namespace Envoy {
 namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
-
 namespace {
+
 Api::IoCallUint64Result makeNoError(uint64_t rc) {
   auto no_error = Api::ioCallUint64ResultNoError();
   no_error.rc_ = rc;
@@ -48,7 +48,6 @@ public:
               udp_response_.buffer_->move(send_data.buffer_);
               return makeNoError(udp_response_.buffer_->length());
             }));
-
     EXPECT_CALL(callbacks_.udp_listener_, dispatcher()).WillRepeatedly(ReturnRef(dispatcher_));
   }
 
@@ -160,6 +159,9 @@ client_config:
 server_config:
   inline_dns_table:
     external_retry_count: 3
+    known_suffixes:
+    - suffix: foo1.com
+    - suffix: foo2.com
     virtual_domains:
       - name: "www.foo1.com"
         endpoint:
@@ -228,9 +230,7 @@ TEST_F(DnsFilterTest, InvalidQuery) {
   InSequence s;
 
   setup(forward_query_off_config);
-
   sendQueryFromClient("10.0.0.1:1000", "hello");
-
   query_ctx_ = response_parser_->createQueryContext(udp_response_, counters_);
   ASSERT_FALSE(query_ctx_->parse_status_);
 

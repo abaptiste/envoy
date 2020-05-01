@@ -32,7 +32,7 @@ public:
     listener_filters:
       name: "envoy.filters.udp.dns_filter"
       typed_config:
-        '@type': 'type.googleapis.com/envoy.config.filter.udp.dns_filter.v2alpha.DnsFilterConfig'
+        '@type': 'type.googleapis.com/envoy.extensions.filters.udp.dns_filter.v3alpha.DnsFilterConfig'
         stat_prefix: "my_prefix"
         client_config:
           resolver_timeout: 5s

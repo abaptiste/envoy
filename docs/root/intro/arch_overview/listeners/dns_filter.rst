@@ -1,7 +1,7 @@
 DNS Filter
 ==========
 
-Envoy supports DNS responses via a :ref:`UDP listener DNS Filter
+Envoy supports responding to DNS requests by configuring a :ref:`UDP listener DNS Filter
 <config_udp_listener_filters_dns_filter>`.
 
 The DNS filter supports responding to forward queries for A and AAAA records. The answers are
