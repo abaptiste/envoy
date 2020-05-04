@@ -86,24 +86,20 @@ public:
   }
 
   const Network::Address::InstanceConstSharedPtr listener_address_;
-  Server::Configuration::MockListenerFactoryContext listener_factory_;
-  NiceMock<Stats::MockHistogram> histogram_;
-  DnsParserCounters counters_;
-
-  std::unique_ptr<DnsFilter> filter_;
-  Network::MockUdpReadFilterCallbacks callbacks_;
-  Stats::IsolatedStoreImpl stats_store_;
-  Network::UdpRecvData udp_response_;
-
   Api::ApiPtr api_;
-  NiceMock<Filesystem::MockInstance> file_system_;
   DnsFilterEnvoyConfigSharedPtr config_;
-  std::unique_ptr<DnsMessageParser> response_parser_;
-
-  Event::MockDispatcher dispatcher_;
-  std::shared_ptr<Network::MockDnsResolver> resolver_;
-
+  DnsParserCounters counters_;
   DnsQueryContextPtr query_ctx_;
+  Event::MockDispatcher dispatcher_;
+  Network::MockUdpReadFilterCallbacks callbacks_;
+  Network::UdpRecvData udp_response_;
+  NiceMock<Filesystem::MockInstance> file_system_;
+  NiceMock<Stats::MockHistogram> histogram_;
+  Server::Configuration::MockListenerFactoryContext listener_factory_;
+  Stats::IsolatedStoreImpl stats_store_;
+  std::shared_ptr<Network::MockDnsResolver> resolver_;
+  std::unique_ptr<DnsFilter> filter_;
+  std::unique_ptr<DnsMessageParser> response_parser_;
 
   const std::string forward_query_off_config = R"EOF(
 stat_prefix: "my_prefix"
@@ -255,8 +251,8 @@ TEST_F(DnsFilterTest, MaxQueryAndResponseSizeTest) {
   ASSERT_FALSE(query.empty());
 
   sendQueryFromClient("10.0.0.1:1000", query);
-
   ASSERT_LT(udp_response_.buffer_->length(), Utils::MAX_UDP_DNS_SIZE);
+
   query_ctx_ = response_parser_->createQueryContext(udp_response_, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
@@ -357,7 +353,8 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   ASSERT_EQ(1, config_->stats().known_domain_queries_.value());
   ASSERT_EQ(1, config_->stats().local_a_record_answers_.value());
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
-  // ASSERT_EQ(query.size(), config_->stats().downstream_rx_bytes_.value());
+  ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
+  ASSERT_TRUE( config_->stats().downstream_tx_bytes_.used());
 }
 
 TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
@@ -365,8 +362,8 @@ TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
 
   setup(forward_query_off_config);
 
+  constexpr size_t count = 5;
   const std::string domain("www.foo3.com");
-  const size_t count = 5;
   size_t total_query_bytes = 0;
 
   for (size_t i = 0; i < count; i++) {
@@ -452,7 +449,7 @@ TEST_F(DnsFilterTest, LocalTypeAAAAQuery) {
   ASSERT_EQ(1, config_->stats().aaaa_record_queries_.value());
 }
 
-TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
+TEST_F(DnsFilterTest, ExternalResolutionReturnSingleAddress) {
   InSequence s;
 
   const std::string expected_address("130.207.244.251");
@@ -499,7 +496,7 @@ TEST_F(DnsFilterTest, ExternalResolutionSingleAddress) {
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
 
-TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
+TEST_F(DnsFilterTest, ExternalResolutionReturnMultipleAddresses) {
   InSequence s;
 
   const std::list<std::string> expected_address{"130.207.244.251", "130.207.244.252",
@@ -548,20 +545,19 @@ TEST_F(DnsFilterTest, ExternalResolutionMultipleAddresses) {
   EXPECT_TRUE(Mock::VerifyAndClearExpectations(resolver_.get()));
 }
 
-TEST_F(DnsFilterTest, ExternalResolutionNoAddressReturned) {
+TEST_F(DnsFilterTest, ExternalResolutionReturnNoAddresses) {
   InSequence s;
 
-  const std::string expected_address("130.207.244.251");
-  const std::string query_host("www.foobaz.com");
+  const std::string domain("www.foobaz.com");
   setup(forward_query_on_config);
 
   // Verify that we are calling the resolver with the expected name
   Network::DnsResolver::ResolveCb resolve_cb;
-  EXPECT_CALL(*resolver_, resolve(query_host, _, _))
+  EXPECT_CALL(*resolver_, resolve(domain, _, _))
       .WillOnce(DoAll(SaveArg<2>(&resolve_cb), Return(&resolver_->active_query_)));
 
   const std::string query =
-      Utils::buildQueryForDomain(query_host, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
   ASSERT_FALSE(query.empty());
 
   // Send a query to for a name not in our configuration
@@ -661,7 +657,7 @@ TEST_F(DnsFilterTest, RawBufferTest) {
   setup(forward_query_off_config);
   const std::string domain("www.foo3.com");
 
-  char dns_request[] = {
+  constexpr char dns_request[] = {
       0x36, 0x6b,                               // Transaction ID
       0x01, 0x20,                               // Flags
       0x00, 0x01,                               // Questions
@@ -910,7 +906,7 @@ TEST_F(DnsFilterTest, InvalidShortBufferTest) {
   setup(forward_query_off_config);
 
   // This is an invalid query. Envoy should handle the packet and indicate a parsing failure
-  char dns_request[] = {0x1c};
+  constexpr char dns_request[] = {0x1c};
 
   const std::string query = Utils::buildQueryFromBytes(dns_request, 1);
 
