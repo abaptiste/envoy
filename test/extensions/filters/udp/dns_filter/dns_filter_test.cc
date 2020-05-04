@@ -354,7 +354,7 @@ TEST_F(DnsFilterTest, SingleTypeAQuery) {
   ASSERT_EQ(1, config_->stats().local_a_record_answers_.value());
   ASSERT_EQ(1, config_->stats().a_record_queries_.value());
   ASSERT_TRUE(config_->stats().downstream_rx_bytes_.used());
-  ASSERT_TRUE( config_->stats().downstream_tx_bytes_.used());
+  ASSERT_TRUE(config_->stats().downstream_tx_bytes_.used());
 }
 
 TEST_F(DnsFilterTest, RepeatedTypeAQuery) {
