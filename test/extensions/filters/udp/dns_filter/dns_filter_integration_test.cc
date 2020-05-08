@@ -200,7 +200,7 @@ TEST_P(DnsFilterIntegrationTest, ClusterEndpointLookupTest) {
   std::string query = Utils::buildQueryForDomain("cluster.foo1.com", record_type, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
-  query_ctx_ = response_parser_->createQueryContext(response);
+  query_ctx_ = response_parser_->createQueryContext(response, counters_);
   ASSERT_TRUE(query_ctx_->parse_status_);
 
   ASSERT_EQ(2, query_ctx_->answers_.size());

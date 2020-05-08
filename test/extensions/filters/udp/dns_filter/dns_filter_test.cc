@@ -51,7 +51,7 @@ public:
     EXPECT_CALL(callbacks_.udp_listener_, dispatcher()).WillRepeatedly(ReturnRef(dispatcher_));
   }
 
-  ~DnsFilterTest() { EXPECT_CALL(callbacks_.udp_listener_, onDestroy()); }
+  ~DnsFilterTest() override { EXPECT_CALL(callbacks_.udp_listener_, onDestroy()); }
 
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;

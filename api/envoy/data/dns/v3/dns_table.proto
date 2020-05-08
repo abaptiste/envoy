@@ -68,7 +68,7 @@ message DnsTable {
     google.protobuf.Duration answer_ttl = 3 [(validate.rules).duration = {gt {}}];
   }
 
-  // Control how many times envoy makes an attempt to forward a query to an external server
+  // Control how many times Envoy makes an attempt to forward a query to an external server
   uint32 external_retry_count = 1;
 
   // Fully qualified domain names for which Envoy will respond to queries. By leaving this
