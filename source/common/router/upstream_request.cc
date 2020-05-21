@@ -78,6 +78,9 @@ UpstreamRequest::~UpstreamRequest() {
     // Allows for testing.
     per_try_timeout_->disableTimer();
   }
+  if (max_stream_duration_timer_ != nullptr) {
+    max_stream_duration_timer_->disableTimer();
+  }
   clearRequestEncoder();
 
   // If desired, fire the per-try histogram when the UpstreamRequest
@@ -382,7 +385,18 @@ void UpstreamRequest::onPoolReady(
     paused_for_connect_ = true;
   }
 
+  if (upstream_host_->cluster().commonHttpProtocolOptions().has_max_stream_duration()) {
+    const auto max_stream_duration = std::chrono::milliseconds(DurationUtil::durationToMilliseconds(
+        upstream_host_->cluster().commonHttpProtocolOptions().max_stream_duration()));
+    if (max_stream_duration.count()) {
+      max_stream_duration_timer_ = parent_.callbacks()->dispatcher().createTimer(
+          [this]() -> void { onStreamMaxDurationReached(); });
+      max_stream_duration_timer_->enableTimer(max_stream_duration);
+    }
+  }
+
   upstream_->encodeHeaders(*parent_.downstreamHeaders(), shouldSendEndStream());
+
   calling_encode_headers_ = false;
 
   if (!paused_for_connect_) {
@@ -424,6 +438,13 @@ void UpstreamRequest::encodeBodyAndTrailers() {
       upstream_timing_.onLastUpstreamTxByteSent(parent_.callbacks()->dispatcher().timeSource());
     }
   }
+}
+
+void UpstreamRequest::onStreamMaxDurationReached() {
+  upstream_host_->cluster().stats().upstream_rq_max_duration_reached_.inc();
+
+  // The upstream had closed then try to retry along with retry policy.
+  parent_.onStreamMaxDurationReached(*this);
 }
 
 void UpstreamRequest::clearRequestEncoder() {
@@ -569,6 +590,12 @@ void TcpUpstream::encodeHeaders(const Http::RequestHeaderMap&, bool end_stream) 
   if (data.length() != 0 || end_stream) {
     upstream_conn_data_->connection().write(data, end_stream);
   }
+
+  // TcpUpstream::encodeHeaders is called after the UpstreamRequest is fully initialized. Also use
+  // this time to synthesize the 200 response headers downstream to complete the CONNECT handshake.
+  Http::ResponseHeaderMapPtr headers{
+      Http::createHeaderMap<Http::ResponseHeaderMapImpl>({{Http::Headers::get().Status, "200"}})};
+  upstream_request_->decodeHeaders(std::move(headers), false);
 }
 
 void TcpUpstream::encodeTrailers(const Http::RequestTrailerMap&) {
@@ -589,12 +616,6 @@ void TcpUpstream::resetStream() {
 }
 
 void TcpUpstream::onUpstreamData(Buffer::Instance& data, bool end_stream) {
-  if (!sent_headers_) {
-    Http::ResponseHeaderMapPtr headers{
-        Http::createHeaderMap<Http::ResponseHeaderMapImpl>({{Http::Headers::get().Status, "200"}})};
-    upstream_request_->decodeHeaders(std::move(headers), false);
-    sent_headers_ = true;
-  }
   upstream_request_->decodeData(data, end_stream);
 }
 

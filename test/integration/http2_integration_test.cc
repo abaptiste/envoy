@@ -823,31 +823,25 @@ TEST_P(Http2IntegrationTest, CodecErrorAfterStreamStart) {
 
 TEST_P(Http2IntegrationTest, BadMagic) {
   initialize();
-  Buffer::OwnedImpl buffer("hello");
   std::string response;
-  RawConnectionDriver connection(
-      lookupPort("http"), buffer,
-      [&](Network::ClientConnection&, const Buffer::Instance& data) -> void {
+  auto connection = createConnectionDriver(
+      lookupPort("http"), "hello",
+      [&response](Network::ClientConnection&, const Buffer::Instance& data) -> void {
         response.append(data.toString());
-      },
-      version_);
-
-  connection.run();
+      });
+  connection->run();
   EXPECT_EQ("", response);
 }
 
 TEST_P(Http2IntegrationTest, BadFrame) {
   initialize();
-  Buffer::OwnedImpl buffer("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror");
   std::string response;
-  RawConnectionDriver connection(
-      lookupPort("http"), buffer,
-      [&](Network::ClientConnection&, const Buffer::Instance& data) -> void {
+  auto connection = createConnectionDriver(
+      lookupPort("http"), "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror",
+      [&response](Network::ClientConnection&, const Buffer::Instance& data) -> void {
         response.append(data.toString());
-      },
-      version_);
-
-  connection.run();
+      });
+  connection->run();
   EXPECT_TRUE(response.find("SETTINGS expected") != std::string::npos);
 }
 
@@ -1123,27 +1117,29 @@ TEST_P(Http2IntegrationTest, SimultaneousRequestWithBufferLimits) {
 
 // Test downstream connection delayed close processing.
 TEST_P(Http2IntegrationTest, DelayedCloseAfterBadFrame) {
+  config_helper_.addConfigModifier(
+      [](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
+             hcm) { hcm.mutable_delayed_close_timeout()->set_nanos(1000 * 1000); });
   initialize();
-  Buffer::OwnedImpl buffer("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror");
   std::string response;
-  RawConnectionDriver connection(
-      lookupPort("http"), buffer,
+
+  auto connection = createConnectionDriver(
+      lookupPort("http"), "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror",
       [&](Network::ClientConnection& connection, const Buffer::Instance& data) -> void {
         response.append(data.toString());
         connection.dispatcher().exit();
-      },
-      version_);
+      });
 
-  connection.run();
+  connection->run();
   EXPECT_THAT(response, HasSubstr("SETTINGS expected"));
   // Due to the multiple dispatchers involved (one for the RawConnectionDriver and another for the
   // Envoy server), it's possible the delayed close timer could fire and close the server socket
   // prior to the data callback above firing. Therefore, we may either still be connected, or have
   // received a remote close.
-  if (connection.lastConnectionEvent() == Network::ConnectionEvent::Connected) {
-    connection.run();
+  if (connection->lastConnectionEvent() == Network::ConnectionEvent::Connected) {
+    connection->run();
   }
-  EXPECT_EQ(connection.lastConnectionEvent(), Network::ConnectionEvent::RemoteClose);
+  EXPECT_EQ(connection->lastConnectionEvent(), Network::ConnectionEvent::RemoteClose);
   EXPECT_EQ(test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value(),
             1);
 }
@@ -1154,25 +1150,23 @@ TEST_P(Http2IntegrationTest, DelayedCloseDisabled) {
       [](envoy::extensions::filters::network::http_connection_manager::v3::HttpConnectionManager&
              hcm) { hcm.mutable_delayed_close_timeout()->set_seconds(0); });
   initialize();
-  Buffer::OwnedImpl buffer("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror");
   std::string response;
-  RawConnectionDriver connection(
-      lookupPort("http"), buffer,
+  auto connection = createConnectionDriver(
+      lookupPort("http"), "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\nhelloworldcauseanerror",
       [&](Network::ClientConnection& connection, const Buffer::Instance& data) -> void {
         response.append(data.toString());
         connection.dispatcher().exit();
-      },
-      version_);
+      });
 
-  connection.run();
+  connection->run();
   EXPECT_THAT(response, HasSubstr("SETTINGS expected"));
   // Due to the multiple dispatchers involved (one for the RawConnectionDriver and another for the
   // Envoy server), it's possible for the 'connection' to receive the data and exit the dispatcher
   // prior to the FIN being received from the server.
-  if (connection.lastConnectionEvent() == Network::ConnectionEvent::Connected) {
-    connection.run();
+  if (connection->lastConnectionEvent() == Network::ConnectionEvent::Connected) {
+    connection->run();
   }
-  EXPECT_EQ(connection.lastConnectionEvent(), Network::ConnectionEvent::RemoteClose);
+  EXPECT_EQ(connection->lastConnectionEvent(), Network::ConnectionEvent::RemoteClose);
   EXPECT_EQ(test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value(),
             0);
 }
@@ -1569,8 +1563,6 @@ void Http2FloodMitigationTest::floodServer(const Http2Frame& frame, const std::s
 
   EXPECT_LE(total_bytes_sent, TransmitThreshold) << "Flood mitigation is broken.";
   EXPECT_EQ(1, test_server_->counter(flood_stat)->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 // Verify that the server detects the flood using specified request parameters.
@@ -1594,8 +1586,6 @@ void Http2FloodMitigationTest::floodServer(absl::string_view host, absl::string_
   if (!flood_stat.empty()) {
     EXPECT_EQ(1, test_server_->counter(flood_stat)->value());
   }
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 INSTANTIATE_TEST_SUITE_P(IpVersions, Http2FloodMitigationTest,
@@ -1663,8 +1653,6 @@ TEST_P(Http2FloodMitigationTest, RST_STREAM) {
   }
   EXPECT_LE(total_bytes_sent, TransmitThreshold) << "Flood mitigation is broken.";
   EXPECT_EQ(1, test_server_->counter("http2.outbound_control_flood")->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 // Verify that the server stop reading downstream connection on protocol error.
@@ -1700,8 +1688,6 @@ TEST_P(Http2FloodMitigationTest, EmptyHeaders) {
   tcp_client_->waitForDisconnect();
 
   EXPECT_EQ(1, test_server_->counter("http2.inbound_empty_frames_flood")->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 TEST_P(Http2FloodMitigationTest, EmptyHeadersContinuation) {
@@ -1719,8 +1705,6 @@ TEST_P(Http2FloodMitigationTest, EmptyHeadersContinuation) {
   tcp_client_->waitForDisconnect();
 
   EXPECT_EQ(1, test_server_->counter("http2.inbound_empty_frames_flood")->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 TEST_P(Http2FloodMitigationTest, EmptyData) {
@@ -1739,8 +1723,6 @@ TEST_P(Http2FloodMitigationTest, EmptyData) {
   tcp_client_->waitForDisconnect();
 
   EXPECT_EQ(1, test_server_->counter("http2.inbound_empty_frames_flood")->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
 }
 
 TEST_P(Http2FloodMitigationTest, PriorityIdleStream) {
@@ -1805,8 +1787,6 @@ TEST_P(Http2FloodMitigationTest, ZerolenHeader) {
   tcp_client_->waitForDisconnect();
 
   EXPECT_EQ(1, test_server_->counter("http2.rx_messaging_error")->value());
-  EXPECT_EQ(1,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
   EXPECT_THAT(waitForAccessLog(access_log_name_), HasSubstr("http2.invalid.header.field"));
   // expect a downstream protocol error.
   EXPECT_THAT(waitForAccessLog(access_log_name_), HasSubstr("DPE"));
@@ -1843,8 +1823,6 @@ TEST_P(Http2FloodMitigationTest, ZerolenHeaderAllowed) {
   tcp_client_->close();
 
   EXPECT_EQ(1, test_server_->counter("http2.rx_messaging_error")->value());
-  EXPECT_EQ(0,
-            test_server_->counter("http.config_test.downstream_cx_delayed_close_timeout")->value());
   EXPECT_THAT(waitForAccessLog(access_log_name_), HasSubstr("http2.invalid.header.field"));
   // expect Downstream Protocol Error
   EXPECT_THAT(waitForAccessLog(access_log_name_), HasSubstr("DPE"));
