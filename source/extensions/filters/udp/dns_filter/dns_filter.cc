@@ -159,6 +159,8 @@ void DnsFilter::onData(Network::UdpRecvData& client_request) {
   // Setup counters for the parser
   DnsParserCounters parser_counters;
   parser_counters.underflow_counter = &config_->stats().query_buffer_underflow_;
+  parser_counters.record_name_overflow = &config_->stats().record_name_overflow_;
+  parser_counters.query_parsing_failure = &config_->stats().query_parsing_failure_;
 
   // Parse the query, if it fails return an response to the client
   DnsQueryContextPtr query_context =

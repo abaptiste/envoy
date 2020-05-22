@@ -261,6 +261,9 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, header_.questions);
     auto rec = parseDnsQueryRecord(buffer, &offset);
     if (rec == nullptr) {
+      if (context->counters_.query_parsing_failure) {
+        context->counters_.query_parsing_failure->inc();
+      }
       ENVOY_LOG(debug, "Couldn't parse query record from buffer");
       return false;
     }
@@ -612,20 +615,19 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
 
     while (serialized_answers < num_answers) {
       const auto answer = std::next(answers.begin(), (index++ % num_answers));
+      if (answer->first != query->name_) {
+        continue;
+      }
       // Query names are limited to 255 characters. Since we are using ares to decode the encoded
       // names, we should not end up with a non-conforming name here.
       //
       // See Section 2.3.4 of https://tools.ietf.org/html/rfc1035
-
-      // TODO(abaptiste): add stats for record overflow
       if (query->name_.size() > MAX_DNS_NAME_SIZE) {
-        ENVOY_LOG(
-            debug,
-            "Query name '{}' is longer than the maximum permitted length. Skipping serialization",
-            query->name_);
-        continue;
-      }
-      if (answer->first != query->name_) {
+        if (query_context->counters_.record_name_overflow) {
+          query_context->counters_.record_name_overflow->inc();
+        }
+        ENVOY_LOG(debug, "'{}' is longer than the maximum length. Skipping serialization",
+                  query->name_);
         continue;
       }
 

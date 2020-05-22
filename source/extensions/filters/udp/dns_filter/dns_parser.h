@@ -83,6 +83,8 @@ using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
  */
 struct DnsParserCounters {
   Stats::Counter* underflow_counter;
+  Stats::Counter* record_name_overflow;
+  Stats::Counter* query_parsing_failure;
 };
 
 /**
