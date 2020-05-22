@@ -24,7 +24,7 @@ public:
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
     response_parser_ = std::make_unique<DnsMessageParser>(
-        true /*recursive queries */, api_->timeSource(), 0 /* retry_count */, histogram_);
+        true /* recursive queries */, api_->timeSource(), 3 /* retries */, random_, histogram_);
   }
 
   static std::string configToUse() {
@@ -96,6 +96,7 @@ public:
 
   Api::ApiPtr api_;
   NiceMock<Stats::MockHistogram> histogram_;
+  NiceMock<Runtime::MockRandomGenerator> random_;
   DnsParserCounters counters_;
   std::unique_ptr<DnsMessageParser> response_parser_;
   DnsQueryContextPtr query_ctx_;
@@ -197,7 +198,8 @@ TEST_P(DnsFilterIntegrationTest, ClusterEndpointLookupTest) {
   }
 
   Network::UdpRecvData response;
-  std::string query = Utils::buildQueryForDomain("cluster.foo1.com", record_type, DNS_RECORD_CLASS_IN);
+  std::string query =
+      Utils::buildQueryForDomain("cluster.foo1.com", record_type, DNS_RECORD_CLASS_IN);
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);

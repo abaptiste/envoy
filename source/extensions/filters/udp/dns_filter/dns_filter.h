@@ -84,6 +84,7 @@ public:
   const AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forwardQueries() const { return forward_queries_; }
   uint64_t retryCount() const { return retry_count_; }
+  Runtime::RandomGenerator& random() const { return random_; }
   std::chrono::milliseconds resolverTimeout() const { return resolver_timeout_; }
 
 private:
@@ -110,6 +111,7 @@ private:
   uint64_t retry_count_;
   AddressConstPtrVec resolvers_;
   std::chrono::milliseconds resolver_timeout_;
+  Runtime::RandomGenerator& random_;
 };
 
 using DnsFilterEnvoyConfigSharedPtr = std::shared_ptr<const DnsFilterEnvoyConfig>;
@@ -152,9 +154,10 @@ private:
   DnsLookupResponseCode getResponseForQuery(DnsQueryContextPtr& context);
 
   /**
-   * @return uint32_t retrieves the configured per domain TTL to be inserted into answer records
+   * @return std::chrono::seconds retrieves the configured per domain TTL to be inserted into answer
+   * records
    */
-  uint32_t getDomainTTL(const absl::string_view domain);
+  std::chrono::seconds getDomainTTL(const absl::string_view domain);
 
   /**
    * @brief Resolves the supplied query from configured clusters

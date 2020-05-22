@@ -7,6 +7,7 @@
 #include "envoy/network/listener.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/runtime/runtime_impl.h"
 #include "common/stats/timespan_impl.h"
 
 namespace Envoy {
@@ -65,11 +66,11 @@ using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>
 class DnsAnswerRecord : public BaseDnsRecord {
 public:
   DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
-                  const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr)
+                  const std::chrono::seconds ttl, Network::Address::InstanceConstSharedPtr ipaddr)
       : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
   bool serialize(Buffer::OwnedImpl& output) override;
 
-  const uint32_t ttl_;
+  const std::chrono::seconds ttl_;
   const Network::Address::InstanceConstSharedPtr ip_addr_;
 };
 
@@ -156,9 +157,9 @@ public:
   });
 
   DnsMessageParser(bool recurse, TimeSource& timesource, uint64_t retry_count,
-                   Stats::Histogram& latency_histogram)
+                   Runtime::RandomGenerator& random, Stats::Histogram& latency_histogram)
       : recursion_available_(recurse), timesource_(timesource), retry_count_(retry_count),
-        query_latency_histogram_(latency_histogram) {}
+        query_latency_histogram_(latency_histogram), rng_(random) {}
 
   // TODO: Do not include this in the PR
   void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
@@ -210,7 +211,8 @@ public:
    * @param ipaddr the address that is returned in the answer record
    */
   void buildDnsAnswerRecord(DnsQueryContextPtr& context, const DnsQueryRecord& query_rec,
-                            const uint32_t ttl, Network::Address::InstanceConstSharedPtr ipaddr);
+                            const std::chrono::seconds ttl,
+                            Network::Address::InstanceConstSharedPtr ipaddr);
 
   /**
    * @return uint16_t the response code flag value from a parsed dns object
@@ -225,7 +227,7 @@ public:
   /**
    * @return uint16_t the response code flag value from a generated dns object
    */
-  uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(generated_.flags.rcode); }
+  uint16_t getAnswerResponseCode() { return static_cast<uint16_t>(response_header_.flags.rcode); }
 
   /**
    * @brief Parse the incoming query and create a context object for the filter
@@ -278,7 +280,8 @@ private:
   uint64_t retry_count_;
   Stats::Histogram& query_latency_histogram_;
   DnsHeader header_;
-  DnsHeader generated_;
+  DnsHeader response_header_;
+  Runtime::RandomGenerator& rng_;
 };
 
 } // namespace DnsFilter

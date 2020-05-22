@@ -128,7 +128,7 @@ bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
   if (serializeName(output)) {
     output.writeBEInt<uint16_t>(type_);
     output.writeBEInt<uint16_t>(class_);
-    output.writeBEInt<uint32_t>(ttl_);
+    output.writeBEInt<uint32_t>(static_cast<uint32_t>(ttl_.count()));
 
     ASSERT(ip_addr_ != nullptr);
     const auto ip_address = ip_addr_->ip();
@@ -417,8 +417,8 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   *offset = data_offset;
 
-  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class, ttl,
-                                           std::move(ip_addr));
+  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class,
+                                           std::chrono::seconds(ttl), std::move(ip_addr));
 }
 
 DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
@@ -471,44 +471,45 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
 void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
                                            const uint16_t questions, const uint16_t answers) {
   // Copy the transaction ID
-  generated_.id = header_.id;
+  response_header_.id = header_.id;
 
   // Signify that this is a response to a query
-  generated_.flags.qr = 1;
+  response_header_.flags.qr = 1;
 
-  generated_.flags.opcode = header_.flags.opcode;
-  generated_.flags.aa = 0;
-  generated_.flags.tc = 0;
+  response_header_.flags.opcode = header_.flags.opcode;
+  response_header_.flags.aa = 0;
+  response_header_.flags.tc = 0;
 
   // Copy Recursion flags
-  generated_.flags.rd = header_.flags.rd;
+  response_header_.flags.rd = header_.flags.rd;
 
   // Set the recursion flag based on whether Envoy is configured to forward queries
-  generated_.flags.ra = recursion_available_;
+  response_header_.flags.ra = recursion_available_;
 
   // reserved flag is not set
-  generated_.flags.z = 0;
+  response_header_.flags.z = 0;
 
   // Set the authenticated flags to zero
-  generated_.flags.ad = 0;
+  response_header_.flags.ad = 0;
 
-  generated_.flags.cd = 0;
-  generated_.answers = answers;
-  generated_.flags.rcode = query_context->response_code_;
+  response_header_.flags.cd = 0;
+  response_header_.answers = answers;
+  response_header_.flags.rcode = query_context->response_code_;
 
   // Set the number of questions from the incoming query
-  generated_.questions = questions;
+  response_header_.questions = questions;
 
   // We will not include any additional records
-  generated_.authority_rrs = 0;
-  generated_.additional_rrs = 0;
+  response_header_.authority_rrs = 0;
+  response_header_.additional_rrs = 0;
 
   // TODO: Remove before pushing upstream
-  dumpFlags(generated_);
+  dumpFlags(response_header_);
 }
 
 void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
-                                            const DnsQueryRecord& query_rec, const uint32_t ttl,
+                                            const DnsQueryRecord& query_rec,
+                                            const std::chrono::seconds ttl,
                                             Network::Address::InstanceConstSharedPtr ipaddr) {
   // Verify that we have an address matching the query record type
   switch (query_rec.type_) {
@@ -575,9 +576,13 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   static constexpr uint64_t MAX_DNS_RESPONSE_SIZE = 512;
   static constexpr uint64_t MAX_DNS_NAME_SIZE = 255;
 
+  // Amazon Route53 will return up to 8 records in an answer
+  // https://aws.amazon.com/route53/faqs/#associate_multiple_ip_with_single_record
+  static constexpr size_t MAX_RETURNED_RECORDS = 8;
+
   // Each response must have DNS flags, which spans 4 bytes. Account for them immediately so that we
   // can adjust the number of returned answers to remain under the limit
-  uint64_t total_buffer_size = 4;
+  uint64_t total_buffer_size = sizeof(DnsHeaderFlags);
   uint16_t serialized_answers = 0;
   uint16_t serialized_queries = 0;
 
@@ -596,11 +601,23 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
     ++serialized_queries;
     total_buffer_size += query_buffer.length();
 
-    for (const auto& answer : query_context->answers_) {
+    const auto& answers = query_context->answers_;
+    if (answers.empty()) {
+      continue;
+    }
+    const size_t num_answers = answers.size();
+
+    // Randomize the starting index if we have more than 8 records
+    size_t index = num_answers > MAX_RETURNED_RECORDS ? rng_.random() % num_answers : 0;
+
+    while (serialized_answers < num_answers) {
+      const auto answer = std::next(answers.begin(), (index++ % num_answers));
       // Query names are limited to 255 characters. Since we are using ares to decode the encoded
       // names, we should not end up with a non-conforming name here.
       //
       // See Section 2.3.4 of https://tools.ietf.org/html/rfc1035
+
+      // TODO(abaptiste): add stats for record overflow
       if (query->name_.size() > MAX_DNS_NAME_SIZE) {
         ENVOY_LOG(
             debug,
@@ -608,18 +625,16 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
             query->name_);
         continue;
       }
-
-      if (answer.first != query->name_) {
+      if (answer->first != query->name_) {
         continue;
       }
 
       Buffer::OwnedImpl serialized_answer;
-      if (!answer.second->serialize(serialized_answer)) {
+      if (!answer->second->serialize(serialized_answer)) {
         ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
         continue;
       }
       const uint64_t serialized_answer_length = serialized_answer.length();
-
       if ((total_buffer_size + serialized_answer_length) > MAX_DNS_RESPONSE_SIZE) {
         break;
       }
@@ -627,8 +642,11 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
       ++serialized_answers;
       total_buffer_size += serialized_answer_length;
       answer_buffer.add(serialized_answer);
-    }
 
+      if (serialized_answers == MAX_RETURNED_RECORDS) {
+        break;
+      }
+    }
     query->query_time_ms_->complete();
     ENVOY_LOG(trace, "Query ['{}'] latency: {}", query->name_,
               query->query_time_ms_->elapsed().count());
@@ -638,16 +656,16 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   setDnsResponseFlags(query_context, serialized_queries, serialized_answers);
 
   // Build the response buffer for transmission to the client
-  buffer.writeBEInt<uint16_t>(generated_.id);
+  buffer.writeBEInt<uint16_t>(response_header_.id);
 
   uint16_t flags;
-  ::memcpy(&flags, static_cast<void*>(&generated_.flags), sizeof(uint16_t));
+  ::memcpy(&flags, static_cast<void*>(&response_header_.flags), sizeof(uint16_t));
   buffer.writeBEInt<uint16_t>(flags);
 
-  buffer.writeBEInt<uint16_t>(generated_.questions);
-  buffer.writeBEInt<uint16_t>(generated_.answers);
-  buffer.writeBEInt<uint16_t>(generated_.authority_rrs);
-  buffer.writeBEInt<uint16_t>(generated_.additional_rrs);
+  buffer.writeBEInt<uint16_t>(response_header_.questions);
+  buffer.writeBEInt<uint16_t>(response_header_.answers);
+  buffer.writeBEInt<uint16_t>(response_header_.authority_rrs);
+  buffer.writeBEInt<uint16_t>(response_header_.additional_rrs);
 
   // write the queries and answers
   buffer.move(query_buffer);

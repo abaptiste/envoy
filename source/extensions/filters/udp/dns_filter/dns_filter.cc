@@ -19,7 +19,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     Server::Configuration::ListenerFactoryContext& context,
     const envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig& config)
     : root_scope_(context.scope()), cluster_manager_(context.clusterManager()), api_(context.api()),
-      stats_(generateStats(config.stat_prefix(), root_scope_)) {
+      stats_(generateStats(config.stat_prefix(), root_scope_)), random_(context.random()) {
   using envoy::extensions::filters::udp::dns_filter::v3alpha::DnsFilterConfig;
 
   const auto& server_config = config.server_config();
@@ -39,18 +39,26 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     if (virtual_domain.endpoint().has_address_list()) {
       const auto& address_list = virtual_domain.endpoint().address_list().address();
       addrs.reserve(address_list.size());
+
+      // Shuffle the configured addresses. We store the addresses starting at a random
+      // list index so that we do not always return answers in the same order as the IPs
+      // are configured.
+      size_t i = random_.random();
+
       // Creating the IP address will throw an exception if the address string is malformed
-      for (const auto& address : address_list) {
-        auto ipaddr = Network::Utility::parseInternetAddress(address, 0 /* port */);
+      for (auto index = 0; index < address_list.size(); index++) {
+        const auto address_iter = std::next(address_list.begin(), (i++ % address_list.size()));
+        auto ipaddr = Network::Utility::parseInternetAddress(*address_iter, 0 /* port */);
         addrs.push_back(std::move(ipaddr));
       }
-    } else { // if (virtual_domain.endpoint().has_cluster_name()) {
+    } else {
       cluster_name = virtual_domain.endpoint().cluster_name();
     }
 
-    DnsEndpointConfig endpoint_config{
-        .address_list = absl::make_optional<AddressConstPtrVec>(std::move(addrs)),
-        .cluster_name = absl::make_optional<std::string>(cluster_name)};
+    DnsEndpointConfig endpoint_config;
+    endpoint_config.address_list = absl::make_optional<AddressConstPtrVec>(std::move(addrs));
+    endpoint_config.cluster_name = absl::make_optional<std::string>(cluster_name);
+
     virtual_domains_.emplace(virtual_domain.name(), endpoint_config);
 
     std::chrono::seconds ttl = virtual_domain.has_answer_ttl()
@@ -59,7 +67,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
     domain_ttl_.emplace(virtual_domain.name(), ttl);
   }
 
-  // Add known domains
+  // Add known domain suffixes
   known_suffixes_.reserve(dns_table.known_suffixes().size());
   for (const auto& suffix : dns_table.known_suffixes()) {
     auto matcher_ptr = std::make_unique<Matchers::StringMatcherImpl>(suffix);
@@ -92,16 +100,6 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
   }
 
   const auto& datasource = config.external_dns_table();
-  const auto external_dns_table =
-      Config::DataSource::read(datasource, false /* allow_empty */, api_);
-  if (external_dns_table.empty()) {
-    ENVOY_LOG(debug, "Empty string returned from reading data aource");
-    return false;
-  }
-
-  ENVOY_LOG(debug, "Loading DNS table from external file: {}. {} bytes", datasource.filename(),
-            external_dns_table.size());
-
   bool data_source_loaded = false;
   try {
     // Data structure is deduced from the file extension. If the data is not read an exception
@@ -112,9 +110,9 @@ bool DnsFilterEnvoyConfig::loadServerConfig(
                               false /* do_boosting */);
     data_source_loaded = true;
   } catch (const ProtobufMessage::UnknownProtoFieldException& e) {
-    ENVOY_LOG(warn, "Invalid field in datasource configuration: {}", e.what());
+    ENVOY_LOG(warn, "Invalid field in DNS Filter datasource configuration: {}", e.what());
   } catch (const EnvoyException& e) {
-    ENVOY_LOG(warn, "Filesystem config update failure: {}", e.what());
+    ENVOY_LOG(warn, "Filesystem DNS Filter config update failure: {}", e.what());
   }
   return data_source_loaded;
 }
@@ -124,7 +122,8 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     : UdpListenerReadFilter(callbacks), config_(config), listener_(callbacks.udpListener()),
       cluster_manager_(config_->clusterManager()),
       message_parser_(config->forwardQueries(), listener_.dispatcher().timeSource(),
-                      config->retryCount(), config_->stats().downstream_rx_query_latency_) {
+                      config->retryCount(), config->random(),
+                      config_->stats().downstream_rx_query_latency_) {
   // This callback is executed when the dns resolution completes. At that time of a response by the
   // resolver, we build an answer record from each IP returned then send a response to the client
   resolver_callback_ = [this](DnsQueryContextPtr context, const DnsQueryRecord* query,
@@ -143,7 +142,7 @@ DnsFilter::DnsFilter(Network::UdpReadFilterCallbacks& callbacks,
     incrementExternalQueryTypeCount(query->type_);
     for (const auto& ip : iplist) {
       incrementExternalQueryTypeAnswerCount(query->type_);
-      uint16_t ttl = getDomainTTL(query->name_);
+      const std::chrono::seconds ttl = getDomainTTL(query->name_);
       message_parser_.buildDnsAnswerRecord(context, *query, ttl, std::move(ip));
     }
     sendDnsResponse(std::move(context));
@@ -241,18 +240,14 @@ DnsLookupResponseCode DnsFilter::getResponseForQuery(DnsQueryContextPtr& context
   return DnsLookupResponseCode::Success;
 }
 
-uint32_t DnsFilter::getDomainTTL(const absl::string_view domain) {
+std::chrono::seconds DnsFilter::getDomainTTL(const absl::string_view domain) {
   const auto& domain_ttl_config = config_->domainTtl();
   const auto& iter = domain_ttl_config.find(domain);
 
-  uint32_t ttl;
   if (iter == domain_ttl_config.end()) {
-    ttl = static_cast<uint32_t>(DEFAULT_RESOLVER_TTL.count());
-  } else {
-    ttl = static_cast<uint32_t>(iter->second.count());
+    return DEFAULT_RESOLVER_TTL;
   }
-
-  return ttl;
+  return iter->second;
 }
 
 bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
@@ -265,7 +260,7 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
     return false;
   }
 
-  // TODO: Use a trie to find a match instead of iterating through the list
+  // TODO(abaptiste): Use a trie to find a match instead of iterating through the list
   for (auto& suffix : known_suffixes) {
     if (suffix->match(domain_name)) {
       config_->stats().known_domain_queries_.inc();
@@ -278,7 +273,6 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
 const DnsEndpointConfig* DnsFilter::getEndpointConfigForDomain(const absl::string_view domain) {
   const auto& domains = config_->domains();
 
-  // TODO: If we have a large ( > 100) domain list, use a binary search.
   const auto iter = domains.find(domain);
   if (iter == domains.end()) {
     ENVOY_LOG(debug, "No endpoint configuration exists for [{}]", domain);
@@ -322,7 +316,7 @@ bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRe
 
   // Return the address for all discovered endpoints
   size_t discovered_endpoints = 0;
-  const uint32_t ttl = getDomainTTL(query.name_);
+  const std::chrono::seconds ttl = getDomainTTL(query.name_);
   for (const auto& hostsets : cluster->prioritySet().hostSetsPerPriority()) {
     for (const auto& host : hostsets->hosts()) {
       ++discovered_endpoints;
@@ -356,7 +350,7 @@ bool DnsFilter::resolveViaConfiguredHosts(DnsQueryContextPtr& context,
     ENVOY_LOG(debug, "using local address {} for domain [{}]",
               configured_address->ip()->addressAsString(), query.name_);
     ++hosts_found;
-    const uint32_t ttl = getDomainTTL(query.name_);
+    const std::chrono::seconds ttl = getDomainTTL(query.name_);
     message_parser_.buildDnsAnswerRecord(context, query, ttl, configured_address);
   }
   return (hosts_found != 0);

@@ -39,8 +39,8 @@ message DnsTable {
     }];
   }
 
-  // This message type is extensible and can contain a list of addresses, cluster names or
-  // dictate some other method for resolving the addresses for an endpoint
+  // This message type is extensible and can contain a list of addresses, clusters or
+  // dictate a different method for resolving the addresses for an endpoint
   message DnsEndpoint {
     option (udpa.annotations.versioning).previous_message_type =
         "envoy.data.dns.v2alpha.DnsTable.DnsEndpoint";
@@ -64,15 +64,15 @@ message DnsTable {
     // The configuration containing the method to determine the address of this endpoint
     DnsEndpoint endpoint = 2;
 
-    // Sets the TTL in dns answers from Envoy returned to the client. The default TTL is 300s
-    google.protobuf.Duration answer_ttl = 3 [(validate.rules).duration = {gt {}}];
+    // Sets the TTL in DNS answers from Envoy returned to the client. The default TTL is 300s
+    google.protobuf.Duration answer_ttl = 3 [(validate.rules).duration = {gte {seconds: 60}}];
   }
 
-  // Control how many times envoy makes an attempt to forward a query to an external server
-  uint32 external_retry_count = 1;
+  // Control how many times Envoy makes an attempt to forward a query to an external DNS server
+  uint32 external_retry_count = 1 [(validate.rules).uint32 = {lte: 3}];
 
-  // Fully qualified domain names for which Envoy will respond to queries. By leaving this
-  // list empty, Envoy will forward all queries.
+  // Fully qualified domain names for which Envoy will respond to DNS queries. By leaving this
+  // list empty, Envoy will forward all queries to external resolvers
   repeated DnsVirtualDomain virtual_domains = 2;
 
   // This field serves to help Envoy determine whether it can authoritatively answer a query

@@ -56,7 +56,7 @@ public:
   void setupResponseParser() {
     histogram_.unit_ = Stats::Histogram::Unit::Milliseconds;
     response_parser_ = std::make_unique<DnsMessageParser>(
-        true /* recursive queries */, api_->timeSource(), 3 /* retries */, histogram_);
+        true /* recursive queries */, api_->timeSource(), 3 /* retries */, random_, histogram_);
   }
 
   void setup(const std::string& yaml) {
@@ -67,6 +67,8 @@ public:
     EXPECT_CALL(listener_factory_, dispatcher()).Times(AtLeast(0));
     EXPECT_CALL(listener_factory_, clusterManager()).Times(AtLeast(0));
     EXPECT_CALL(listener_factory_, api()).WillOnce(ReturnRef(*api_));
+    ON_CALL(random_, random()).WillByDefault(Return(3));
+    EXPECT_CALL(listener_factory_, random()).WillOnce(ReturnRef(random_));
 
     resolver_ = std::make_shared<Network::MockDnsResolver>();
     EXPECT_CALL(dispatcher_, createDnsResolver(_, _)).WillOnce(Return(resolver_));
@@ -95,6 +97,7 @@ public:
   Network::UdpRecvData udp_response_;
   NiceMock<Filesystem::MockInstance> file_system_;
   NiceMock<Stats::MockHistogram> histogram_;
+  NiceMock<Runtime::MockRandomGenerator> random_;
   Server::Configuration::MockListenerFactoryContext listener_factory_;
   Stats::IsolatedStoreImpl stats_store_;
   std::shared_ptr<Network::MockDnsResolver> resolver_;
@@ -110,38 +113,59 @@ server_config:
     - suffix: foo1.com
     - suffix: foo2.com
     - suffix: foo3.com
+    - suffix: foo16.com
     - suffix: thisismydomainforafivehundredandtwelvebytetest.com
     virtual_domains:
     - name: "www.foo1.com"
       endpoint:
         address_list:
           address:
-          - 10.0.0.1
-          - 10.0.0.2
+          - "10.0.0.1"
+          - "10.0.0.2"
     - name: "www.foo2.com"
       endpoint:
         address_list:
           address:
-          - 2001:8a:c1::2800:7
-          - 2001:8a:c1::2800:8
-          - 2001:8a:c1::2800:9
+          - "2001:8a:c1::2800:7"
+          - "2001:8a:c1::2800:8"
+          - "2001:8a:c1::2800:9"
     - name: "www.foo3.com"
       endpoint:
         address_list:
           address:
-          - 10.0.3.1
+          - "10.0.3.1"
+    - name: "www.foo16.com"
+      endpoint:
+        address_list:
+          address:
+          - "10.0.16.1"
+          - "10.0.16.2"
+          - "10.0.16.3"
+          - "10.0.16.4"
+          - "10.0.16.5"
+          - "10.0.16.6"
+          - "10.0.16.7"
+          - "10.0.16.8"
+          - "10.0.16.9"
+          - "10.0.16.10"
+          - "10.0.16.11"
+          - "10.0.16.12"
+          - "10.0.16.13"
+          - "10.0.16.14"
+          - "10.0.16.15"
+          - "10.0.16.16"
     - name: www.supercalifragilisticexpialidocious.thisismydomainforafivehundredandtwelvebytetest.com
       endpoint:
         address_list:
           address:
-          - 2001:8a:c1::2801:0001
-          - 2001:8a:c1::2801:0002
-          - 2001:8a:c1::2801:0003
-          - 2001:8a:c1::2801:0004
-          - 2001:8a:c1::2801:0005
-          - 2001:8a:c1::2801:0006
-          - 2001:8a:c1::2801:0007
-          - 2001:8a:c1::2801:0008
+          - "2001:8a:c1::2801:0001"
+          - "2001:8a:c1::2801:0002"
+          - "2001:8a:c1::2801:0003"
+          - "2001:8a:c1::2801:0004"
+          - "2001:8a:c1::2801:0005"
+          - "2001:8a:c1::2801:0006"
+          - "2001:8a:c1::2801:0007"
+          - "2001:8a:c1::2801:0008"
 )EOF";
 
   const std::string forward_query_on_config = R"EOF(
@@ -918,6 +942,37 @@ TEST_F(DnsFilterTest, InvalidShortBufferTest) {
 
   ASSERT_EQ(0, config_->stats().a_record_queries_.value());
   ASSERT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, RandomizeFirstAnswerTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  const std::string domain("www.foo16.com");
+
+  const std::string query =
+      Utils::buildQueryForDomain(domain, DNS_RECORD_TYPE_A, DNS_RECORD_CLASS_IN);
+  ASSERT_FALSE(query.empty());
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_, counters_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+
+  // Although 16 addresses are defined, only 8 are returned
+  EXPECT_EQ(8, query_ctx_->answers_.size());
+
+  // We shuffle the list of addresses when we read the config, and in the case of more than
+  // 8 defined addresses, we randomize the initial starting index. We should not end up with
+  // the first answer being the first defined address, or the answers appearing in the same
+  // order as they are defined.
+  const std::list<std::string> defined_order{"10.0.16.1", "10.0.16.2", "10.0.16.3", "10.0.16.4",
+                                             "10.0.16.5", "10.0.16.6", "10.0.16.7", "10.0.16.8"};
+  auto defined_answer_iter = defined_order.begin();
+  for (const auto& answer : query_ctx_->answers_) {
+    const auto resolved_address = answer.second->ip_addr_->ip()->addressAsString();
+    EXPECT_NE(0L, resolved_address.compare(*defined_answer_iter++));
+  }
 }
 
 #if 0

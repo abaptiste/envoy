@@ -64,9 +64,7 @@ std::string buildQueryForDomain(const std::string& name, uint16_t rec_type, uint
   buffer.writeBEInt<uint16_t>(query.additional_rrs);
 
   DnsQueryRecord query_rec(name, rec_type, rec_class);
-
   query_rec.serialize(buffer);
-
   return buffer.toString();
 }
 
