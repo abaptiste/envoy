@@ -901,7 +901,7 @@ TEST_F(DnsFilterTest, NotImplementedQueryTest) {
   InSequence s;
 
   setup(forward_query_off_config);
-  // This buffer requests a CNAME record which we do not support.  We respond to the client with a
+  // This buffer requests a CNAME record which we do not support. We respond to the client with a
   // "not implemented" response code
   constexpr char dns_request[] = {
       0x36, 0x70,                               // Transaction ID
