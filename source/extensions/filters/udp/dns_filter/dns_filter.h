@@ -82,12 +82,12 @@ public:
   const absl::flat_hash_map<std::string, std::chrono::seconds>& domainTtl() const {
     return domain_ttl_;
   }
-  Upstream::ClusterManager& clusterManager() const { return cluster_manager_; }
   const AddressConstPtrVec& resolvers() const { return resolvers_; }
   bool forwardQueries() const { return forward_queries_; }
+  const std::chrono::milliseconds resolverTimeout() const { return resolver_timeout_; }
+  Upstream::ClusterManager& clusterManager() const { return cluster_manager_; }
   uint64_t retryCount() const { return retry_count_; }
   Runtime::RandomGenerator& random() const { return random_; }
-  std::chrono::milliseconds resolverTimeout() const { return resolver_timeout_; }
 
 private:
   static DnsFilterStats generateStats(const std::string& stat_prefix, Stats::Scope& scope) {
@@ -164,6 +164,7 @@ private:
   /**
    * @brief Resolves the supplied query from configured clusters
    *
+   * @param context object containing the query context
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matched a cluster and an answer record was constructed
    */
@@ -172,6 +173,7 @@ private:
   /**
    * @brief Resolves the supplied query from configured hosts
    *
+   * @param context object containing the query context
    * @param query query object containing the name to be resolved
    * @return bool true if the requested name matches a configured domain and answer records can be
    * constructed

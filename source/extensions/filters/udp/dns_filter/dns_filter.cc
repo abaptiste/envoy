@@ -31,7 +31,6 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
   retry_count_ = dns_table.external_retry_count();
 
   const size_t entries = dns_table.virtual_domains().size();
-
   virtual_domains_.reserve(entries);
   for (const auto& virtual_domain : dns_table.virtual_domains()) {
     AddressConstPtrVec addrs{};
@@ -274,13 +273,11 @@ bool DnsFilter::isKnownDomain(const absl::string_view domain_name) {
 
 const DnsEndpointConfig* DnsFilter::getEndpointConfigForDomain(const absl::string_view domain) {
   const auto& domains = config_->domains();
-
   const auto iter = domains.find(domain);
   if (iter == domains.end()) {
     ENVOY_LOG(debug, "No endpoint configuration exists for [{}]", domain);
     return nullptr;
   }
-
   return &(iter->second);
 }
 
@@ -315,6 +312,8 @@ bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRe
     ENVOY_LOG(debug, "Did not find a cluster for name [{}]", lookup_name);
     return false;
   }
+
+  // TODO(abaptiste): consider using host weights when returning answer addresses
 
   // Return the address for all discovered endpoints
   size_t discovered_endpoints = 0;
@@ -358,8 +357,9 @@ bool DnsFilter::resolveViaConfiguredHosts(DnsQueryContextPtr& context,
   return (hosts_found != 0);
 }
 
-void DnsFilter::onReceiveError(Api::IoError::IoErrorCode) {
+void DnsFilter::onReceiveError(Api::IoError::IoErrorCode error_code) {
   config_->stats().downstream_rx_errors_.inc();
+  UNREFERENCED_PARAMETER(error_code);
 }
 
 } // namespace DnsFilter

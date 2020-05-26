@@ -163,13 +163,6 @@ public:
       : recursion_available_(recurse), timesource_(timesource), retry_count_(retry_count),
         query_latency_histogram_(latency_histogram), rng_(random) {}
 
-  // TODO: Do not include this in the PR
-  void dumpBuffer(const std::string& title, const Buffer::InstancePtr& buffer,
-                  const uint64_t offset = 0);
-
-  // TODO: Do not include this in the PR
-  void dumpFlags(const struct DnsHeader& query);
-
   /**
    * @brief Builds an Answer record for the active query. The active query transaction ID is at the
    * top of a queue. This ID is sufficient enough to determine the answer records associated with
