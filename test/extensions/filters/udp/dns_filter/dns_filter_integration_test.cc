@@ -118,10 +118,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(1, query_ctx_->answers_.size());
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
@@ -136,10 +136,10 @@ TEST_P(DnsFilterIntegrationTest, ExternalLookupTestIPv6) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(1, query_ctx_->answers_.size());
-  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(1, query_ctx_->answers_.size());
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
@@ -154,10 +154,10 @@ TEST_P(DnsFilterIntegrationTest, LocalLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(4, query_ctx_->answers_.size());
-  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(4, query_ctx_->answers_.size());
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
@@ -178,10 +178,10 @@ TEST_P(DnsFilterIntegrationTest, ClusterLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(2, query_ctx_->answers_.size());
-  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(2, query_ctx_->answers_.size());
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 TEST_P(DnsFilterIntegrationTest, ClusterEndpointLookupTest) {
@@ -203,10 +203,10 @@ TEST_P(DnsFilterIntegrationTest, ClusterEndpointLookupTest) {
   requestResponseWithListenerAddress(*listener_address, query, response);
 
   query_ctx_ = response_parser_->createQueryContext(response, counters_);
-  ASSERT_TRUE(query_ctx_->parse_status_);
+  EXPECT_TRUE(query_ctx_->parse_status_);
 
-  ASSERT_EQ(2, query_ctx_->answers_.size());
-  ASSERT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(2, query_ctx_->answers_.size());
+  EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
 }
 
 } // namespace

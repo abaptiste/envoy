@@ -132,7 +132,7 @@ public:
 
   // Network::UdpListenerReadFilter callbacks
   void onData(Network::UdpRecvData& client_request) override;
-  void onReceiveError(Api::IoError::IoErrorCode) override;
+  void onReceiveError(Api::IoError::IoErrorCode error_code) override;
 
   /**
    * @return bool true if the domain_name is a known domain for which we respond to queries
