@@ -3,8 +3,8 @@
 set -e
 
 [[ -z "${SRCDIR}" ]] && SRCDIR="${PWD}"
-[[ -z "${VALIDATE_COVERAGE}" ]] && VALIDATE_COVERAGE=true
-[[ -z "${FUZZ_COVERAGE}" ]] && FUZZ_COVERAGE=false
+[[ -z "${VALIDATE_COVERAGE}" ]] && VALIDATE_COVERAGE=false
+[[ -z "${FUZZ_COVERAGE}" ]] && FUZZ_COVERAGE=true
 
 echo "Starting run_envoy_bazel_coverage.sh..."
 echo "    PWD=$(pwd)"
