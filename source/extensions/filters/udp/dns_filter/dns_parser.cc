@@ -2,9 +2,10 @@
 
 #include "envoy/network/address.h"
 
-#include "common/common/empty_string.h"
 #include "common/network/address_impl.h"
 #include "common/network/utility.h"
+
+#include "extensions/filters/udp/dns_filter/dns_filter_utils.h"
 
 #include "ares.h"
 
@@ -17,11 +18,9 @@ bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   // Iterate over a name e.g. "www.domain.com" once and produce a buffer containing each name
   // segment prefixed by its length
   static constexpr char SEPARATOR = '.';
-  static constexpr size_t MAX_LABEL_LENGTH = 63;
-  static constexpr size_t MAX_NAME_LENGTH = 255;
 
   // Names are restricted to 255 bytes per RFC
-  if (name_.size() > MAX_NAME_LENGTH) {
+  if (name_.size() > Utils::MAX_NAME_LENGTH) {
     return false;
   }
 
@@ -30,7 +29,7 @@ bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   auto iter = name_.begin();
 
   while (count != std::string::npos) {
-    if ((count - last) > MAX_LABEL_LENGTH) {
+    if ((count - last) > Utils::MAX_LABEL_LENGTH) {
       return false;
     }
 
@@ -49,16 +48,14 @@ bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
     // Move our last marker to the first position after where we stopped. Search for the next name
     // separator
     last += count;
-    ++last;
-    count = name_.find_first_of(SEPARATOR, last);
+    count = name_.find_first_of(SEPARATOR, ++last);
   }
 
   // Write the remaining segment prepended by its length
   count = name_.size() - last;
   output.writeBEInt<uint8_t>(count);
   for (size_t i = 0; i < count; i++) {
-    output.writeByte(*iter);
-    ++iter;
+    output.writeByte(*iter++);
   }
 
   // Terminate the name record with a null byte
@@ -96,6 +93,28 @@ bool DnsAnswerRecord::serialize(Buffer::OwnedImpl& output) {
     } else if (ip_address->ipv4() != nullptr) {
       output.writeBEInt<uint16_t>(4);
       output.writeLEInt<uint32_t>(ip_address->ipv4()->address());
+    }
+    return true;
+  }
+  return false;
+}
+
+bool DnsSrvRecord::serialize(Buffer::OwnedImpl& output) {
+  if (serializeName(output)) {
+    output.writeBEInt<uint16_t>(type_);
+    output.writeBEInt<uint16_t>(class_);
+    output.writeBEInt<uint32_t>(static_cast<uint32_t>(ttl_.count()));
+
+    // data length includes priority, weight, port, and target name
+    uint16_t data_length = sizeof(priority_) + sizeof(weight_) + sizeof(port_) + target_.size();
+    output.writeBEInt<uint16_t>(data_length);
+    output.writeBEInt<uint16_t>(priority_);
+    output.writeBEInt<uint16_t>(weight_);
+    output.writeBEInt<uint16_t>(port_);
+
+    auto iter = target_.begin();
+    for (size_t i = 0; i < target_.size(); i++) {
+      output.writeByte(*iter++);
     }
     return true;
   }
@@ -152,7 +171,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
       break;
 
     case DnsQueryParseState::Flags:
-      ::memcpy(static_cast<void*>(&header_.flags), &data, sizeof(uint16_t));
+      ::memcpy(static_cast<void*>(&header_.flags), &data, field_size);
       state = DnsQueryParseState::Questions;
       break;
 
@@ -186,8 +205,8 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     return false;
   }
 
-  if (header_.questions > 1) {
-    ENVOY_LOG(debug, "Multiple [{}] questions in DNS query", header_.questions);
+  if (header_.questions != 1) {
+    ENVOY_LOG(debug, "Unexpected number [{}] of questions in DNS query", header_.questions);
     return false;
   }
 
@@ -204,16 +223,11 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     return false;
   }
 
-  if (header_.questions == 0) {
-    ENVOY_LOG(debug, "No questions in DNS request");
-    return false;
-  }
-
   // Almost always, we will have only one query here. Per the RFC, QDCOUNT is usually 1
   context->queries_.reserve(header_.questions);
   for (auto index = 0; index < header_.questions; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] questions", index, header_.questions);
-    auto rec = parseDnsQueryRecord(buffer, &offset);
+    auto rec = parseDnsQueryRecord(buffer, offset);
     if (rec == nullptr) {
       context->counters_.query_parsing_failure.inc();
       ENVOY_LOG(debug, "Couldn't parse query record from buffer");
@@ -226,7 +240,7 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
   // verify the responses returned from the filter.
   for (auto index = 0; index < header_.answers; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, header_.answers);
-    auto rec = parseDnsAnswerRecord(buffer, &offset);
+    auto rec = parseDnsAnswerRecord(buffer, offset);
     if (rec == nullptr) {
       ENVOY_LOG(debug, "Couldn't parse answer record from buffer");
       return false;
@@ -239,11 +253,11 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
 }
 
 const std::string DnsMessageParser::parseDnsNameRecord(const Buffer::InstancePtr& buffer,
-                                                       uint64_t* available_bytes,
-                                                       uint64_t* name_offset) {
+                                                       uint64_t& available_bytes,
+                                                       uint64_t& name_offset) {
   void* buf = buffer->linearize(static_cast<uint32_t>(buffer->length()));
   const unsigned char* linearized_data = static_cast<const unsigned char*>(buf);
-  const unsigned char* record = linearized_data + *name_offset;
+  const unsigned char* record = linearized_data + name_offset;
   long encoded_len;
   char* output;
 
@@ -254,29 +268,118 @@ const std::string DnsMessageParser::parseDnsNameRecord(const Buffer::InstancePtr
 
   std::string name(output);
   ares_free_string(output);
-  *name_offset += encoded_len;
-  *available_bytes -= encoded_len;
+  name_offset += encoded_len;
+  available_bytes -= encoded_len;
 
   return name;
 }
 
-DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
-                                                          uint64_t* offset) {
-  uint64_t data_offset = *offset;
+DnsAnswerRecordPtr DnsMessageParser::parseDnsARecord(DnsAnswerCtx& ctx) {
+  Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
 
-  if (data_offset > buffer->length()) {
+  switch (ctx.record_type_) {
+  case DNS_RECORD_TYPE_A:
+    if (ctx.available_bytes_ >= sizeof(uint32_t)) {
+      sockaddr_in sa4;
+      sa4.sin_addr.s_addr = ctx.buffer_->peekLEInt<uint32_t>(ctx.offset_);
+      ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
+      ctx.offset_ += ctx.data_length_;
+    }
+    break;
+  case DNS_RECORD_TYPE_AAAA:
+    if (ctx.available_bytes_ >= sizeof(absl::uint128)) {
+      sockaddr_in6 sa6;
+      uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
+      static constexpr size_t count = sizeof(absl::uint128) / sizeof(uint8_t);
+      for (size_t index = 0; index < count; index++) {
+        *address6_bytes++ = ctx.buffer_->peekLEInt<uint8_t>(ctx.offset_++);
+      }
+      ip_addr = std::make_shared<Network::Address::Ipv6Instance>(sa6, true);
+    }
+    break;
+  }
+
+  if (ip_addr == nullptr) {
+    ENVOY_LOG(debug, "Unable to parse IP address from data in answer record");
+    return nullptr;
+  }
+
+  ENVOY_LOG(trace, "Parsed address [{}] from record type [{}]: offset {}",
+            ip_addr->ip()->addressAsString(), ctx.record_type_, ctx.offset_);
+
+  return std::make_unique<DnsAnswerRecord>(ctx.record_name_, ctx.record_type_, ctx.record_class_,
+                                           std::chrono::seconds(ctx.ttl_), std::move(ip_addr));
+}
+
+DnsSrvRecordPtr DnsMessageParser::parseDnsSrvRecord(DnsAnswerCtx& ctx) {
+  uint64_t data_length = ctx.data_length_;
+
+  if (data_length < 3 * sizeof(uint16_t)) {
+    ENVOY_LOG(debug, "Insufficient data for reading a complete SRV answer record");
+    return nullptr;
+  }
+
+  const uint64_t available_bytes = ctx.buffer_->length() - ctx.offset_;
+  if (available_bytes < data_length) {
+    ENVOY_LOG(debug, "No data left in buffer for reading SRV answer record");
+    return nullptr;
+  }
+
+  uint16_t priority;
+  priority = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
+  ctx.offset_ += sizeof(uint16_t);
+  data_length -= sizeof(uint16_t);
+
+  uint16_t weight;
+  weight = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
+  ctx.offset_ += sizeof(uint16_t);
+  data_length -= sizeof(uint16_t);
+
+  uint16_t port;
+  port = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
+  ctx.offset_ += sizeof(uint16_t);
+  data_length -= sizeof(uint16_t);
+
+  if (data_length == 0) {
+    ENVOY_LOG(debug, "Insufficient data to parse complete SRV Record");
+    return nullptr;
+  }
+
+  std::string target_name;
+  ctx.buffer_->copyOut(ctx.offset_, data_length,
+                       Utils::getStringPointer(&target_name, data_length + 1));
+
+  ctx.offset_ += data_length;
+
+  const absl::string_view proto = DnsSrvRecord::getProtoFromName(ctx.record_name_);
+
+  if (proto.empty() || target_name.empty()) {
+    ENVOY_LOG(debug, "Could not parse protocol[{}] or target[{}] from SRV record", proto,
+              target_name);
+    return nullptr;
+  }
+
+  auto srv_record = std::make_unique<DnsSrvRecord>(ctx.record_name_, std::string(proto),
+                                                   std::chrono::seconds(ctx.ttl_), priority, weight,
+                                                   port, target_name);
+  return srv_record;
+}
+
+DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::InstancePtr& buffer,
+                                                          uint64_t& offset) {
+  if (offset > buffer->length()) {
     ENVOY_LOG(debug, "Invalid offset for parsing answer record");
     return nullptr;
   }
 
-  uint64_t available_bytes = buffer->length() - data_offset;
+  uint64_t available_bytes = buffer->length() - offset;
 
   if (available_bytes == 0) {
     ENVOY_LOG(debug, "No data left in buffer for reading answer record");
     return nullptr;
   }
 
-  const std::string record_name = parseDnsNameRecord(buffer, &available_bytes, &data_offset);
+  const std::string record_name = parseDnsNameRecord(buffer, available_bytes, offset);
   if (record_name.empty()) {
     ENVOY_LOG(debug, "Unable to parse name record from buffer");
     return nullptr;
@@ -292,20 +395,21 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   // Parse the record type
   uint16_t record_type;
-  record_type = buffer->peekBEInt<uint16_t>(data_offset);
-  data_offset += sizeof(uint16_t);
+  record_type = buffer->peekBEInt<uint16_t>(offset);
+  offset += sizeof(uint16_t);
   available_bytes -= sizeof(uint16_t);
 
-  // We support only A and AAAA record types
-  if (record_type != DNS_RECORD_TYPE_A && record_type != DNS_RECORD_TYPE_AAAA) {
+  // We support A, AAAA and SRV record types
+  if (record_type != DNS_RECORD_TYPE_A && record_type != DNS_RECORD_TYPE_AAAA &&
+      record_type != DNS_RECORD_TYPE_SRV) {
     ENVOY_LOG(debug, "Unsupported record type [{}] found in answer", record_type);
     return nullptr;
   }
 
   // Parse the record class
   uint16_t record_class;
-  record_class = buffer->peekBEInt<uint16_t>(data_offset);
-  data_offset += sizeof(uint16_t);
+  record_class = buffer->peekBEInt<uint16_t>(offset);
+  offset += sizeof(uint16_t);
   available_bytes -= sizeof(uint16_t);
 
   // We support only IN record classes
@@ -316,14 +420,14 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
 
   // Read the record's TTL
   uint32_t ttl;
-  ttl = buffer->peekBEInt<uint32_t>(data_offset);
-  data_offset += sizeof(uint32_t);
+  ttl = buffer->peekBEInt<uint32_t>(offset);
+  offset += sizeof(uint32_t);
   available_bytes -= sizeof(uint32_t);
 
   // Parse the Data Length and address data record
   uint16_t data_length;
-  data_length = buffer->peekBEInt<uint16_t>(data_offset);
-  data_offset += sizeof(uint16_t);
+  data_length = buffer->peekBEInt<uint16_t>(offset);
+  offset += sizeof(uint16_t);
   available_bytes -= sizeof(uint16_t);
 
   if (data_length == 0) {
@@ -331,61 +435,35 @@ DnsAnswerRecordPtr DnsMessageParser::parseDnsAnswerRecord(const Buffer::Instance
     return nullptr;
   }
 
-  // Build an address pointer from the string data.
-  // We don't support anything other than A or AAAA records. If we add support for other record
-  // types, we must account for them here
-  Network::Address::InstanceConstSharedPtr ip_addr = nullptr;
+  auto ctx = DnsAnswerCtx(buffer, record_name, record_type, record_class, available_bytes,
+                          data_length, ttl, offset);
 
   switch (record_type) {
   case DNS_RECORD_TYPE_A:
-    if (available_bytes >= sizeof(uint32_t)) {
-      sockaddr_in sa4;
-      sa4.sin_addr.s_addr = buffer->peekLEInt<uint32_t>(data_offset);
-      ip_addr = std::make_shared<Network::Address::Ipv4Instance>(&sa4);
-      data_offset += data_length;
-    }
-    break;
-  case DNS_RECORD_TYPE_AAAA:
-    if (available_bytes >= sizeof(absl::uint128)) {
-      sockaddr_in6 sa6;
-      uint8_t* address6_bytes = reinterpret_cast<uint8_t*>(&sa6.sin6_addr.s6_addr);
-      static constexpr size_t count = sizeof(absl::uint128) / sizeof(uint8_t);
-      for (size_t index = 0; index < count; index++) {
-        *address6_bytes++ = buffer->peekLEInt<uint8_t>(data_offset++);
-      }
-      ip_addr = std::make_shared<Network::Address::Ipv6Instance>(sa6, true);
-    }
-    break;
+  case DNS_RECORD_TYPE_AAAA: {
+    auto record = parseDnsARecord(ctx);
+    return record;
+  }
+  case DNS_RECORD_TYPE_SRV: {
+    auto record = parseDnsSrvRecord(ctx);
+    return record;
+  }
   default:
     ENVOY_LOG(debug, "Unsupported record type [{}] found in answer", record_type);
-    break;
-  }
-
-  if (ip_addr == nullptr) {
-    ENVOY_LOG(debug, "Unable to parse IP address from data in answer record");
     return nullptr;
   }
-
-  ENVOY_LOG(trace, "Parsed address [{}] from record type [{}]: offset {}",
-            ip_addr->ip()->addressAsString(), record_type, data_offset);
-
-  *offset = data_offset;
-
-  return std::make_unique<DnsAnswerRecord>(record_name, record_type, record_class,
-                                           std::chrono::seconds(ttl), std::move(ip_addr));
 }
 
 DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePtr& buffer,
-                                                        uint64_t* offset) {
-  uint64_t name_offset = *offset;
-  uint64_t available_bytes = buffer->length() - name_offset;
+                                                        uint64_t& offset) {
+  uint64_t available_bytes = buffer->length() - offset;
 
   if (available_bytes == 0) {
     ENVOY_LOG(debug, "No available data in buffer to parse a query record");
     return nullptr;
   }
 
-  const std::string record_name = parseDnsNameRecord(buffer, &available_bytes, &name_offset);
+  const std::string record_name = parseDnsNameRecord(buffer, available_bytes, offset);
   if (record_name.empty()) {
     ENVOY_LOG(debug, "Unable to parse name record from buffer [length {}]", buffer->length());
     return nullptr;
@@ -399,15 +477,15 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
     return nullptr;
   }
 
-  // Read the record type (A or AAAA)
+  // Read the record type
   uint16_t record_type;
-  record_type = buffer->peekBEInt<uint16_t>(name_offset);
-  name_offset += sizeof(record_type);
+  record_type = buffer->peekBEInt<uint16_t>(offset);
+  offset += sizeof(record_type);
 
   // Read the record class. This value is always 1 for internet address records
   uint16_t record_class;
-  record_class = buffer->peekBEInt<uint16_t>(name_offset);
-  name_offset += sizeof(record_class);
+  record_class = buffer->peekBEInt<uint16_t>(offset);
+  offset += sizeof(record_class);
 
   if (record_class != DNS_RECORD_CLASS_IN) {
     ENVOY_LOG(debug, "Unsupported record class '{}' in address record", record_class);
@@ -422,8 +500,7 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
   ENVOY_LOG(trace, "Extracted query record. Name: {} type: {} class: {}", record_name, record_type,
             record_class);
 
-  *offset = name_offset;
-  return std::make_unique<DnsQueryRecord>(record_name, record_type, record_class);
+  return rec;
 }
 
 void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
@@ -462,7 +539,7 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
   response_header_.additional_rrs = 0;
 }
 
-void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
+void DnsMessageParser::storeDnsAnswerRecord(DnsQueryContextPtr& context,
                                             const DnsQueryRecord& query_rec,
                                             const std::chrono::seconds ttl,
                                             Network::Address::InstanceConstSharedPtr ipaddr) {
@@ -481,16 +558,28 @@ void DnsMessageParser::buildDnsAnswerRecord(DnsQueryContextPtr& context,
       return;
     }
     break;
-
-  // TODO(abbaptis): Support additional records (e.g. SRV)
   default:
-    ENVOY_LOG(debug, "record type [{}] is not supported", query_rec.type_);
+    ENVOY_LOG(debug, "record type [{}] is not supported in this function", query_rec.type_);
     return;
   }
 
   auto answer_record = std::make_unique<DnsAnswerRecord>(query_rec.name_, query_rec.type_,
                                                          query_rec.class_, ttl, std::move(ipaddr));
   context->answers_.emplace(query_rec.name_, std::move(answer_record));
+}
+
+void DnsMessageParser::storeDnsSrvAnswerRecord(DnsQueryContextPtr& context,
+                                               const DnsQueryRecord& query_rec,
+                                               const DnsSrvRecordPtr& service) {
+  if (query_rec.type_ != DNS_RECORD_TYPE_SRV) {
+    ENVOY_LOG(debug, "record type [{}] is not supported in this function", query_rec.type_);
+    return;
+  }
+
+  auto srv_record = std::make_unique<DnsSrvRecord>(service->name_, service->proto_, service->ttl_,
+                                                   service->priority_, service->weight_,
+                                                   service->port_, service->target_);
+  context->answers_.emplace(query_rec.name_, std::move(srv_record));
 }
 
 void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
@@ -502,11 +591,17 @@ void DnsMessageParser::setResponseCode(DnsQueryContextPtr& context,
   }
   // Check for unsupported request types
   for (const auto& query : context->queries_) {
-    if (query->type_ != DNS_RECORD_TYPE_A && query->type_ != DNS_RECORD_TYPE_AAAA) {
+    switch (query->type_) {
+    case DNS_RECORD_TYPE_A:
+    case DNS_RECORD_TYPE_AAAA:
+    case DNS_RECORD_TYPE_SRV:
+      break;
+    default:
       context->response_code_ = DNS_RESPONSE_CODE_NOT_IMPLEMENTED;
       return;
     }
   }
+
   // Output validation
   if (serialized_queries == 0) {
     context->response_code_ = DNS_RESPONSE_CODE_FORMAT_ERROR;
@@ -578,7 +673,14 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
             query->name_);
         continue;
       }
+
+      // Only serialize answer records whose names match the query
       if (answer->first != query->name_) {
+        continue;
+      }
+
+      // Only serialize answer records whose types match the query
+      if (answer->second->type_ != query->type_) {
         continue;
       }
 
@@ -587,16 +689,16 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
         ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
         continue;
       }
+
       const uint64_t serialized_answer_length = serialized_answer.length();
       if ((total_buffer_size + serialized_answer_length) > MAX_DNS_RESPONSE_SIZE) {
         break;
       }
 
-      ++serialized_answers;
       total_buffer_size += serialized_answer_length;
       answer_buffer.add(serialized_answer);
 
-      if (serialized_answers == MAX_RETURNED_RECORDS) {
+      if (++serialized_answers == MAX_RETURNED_RECORDS) {
         break;
       }
     }

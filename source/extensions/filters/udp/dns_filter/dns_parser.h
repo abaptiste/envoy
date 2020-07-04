@@ -7,6 +7,7 @@
 #include "envoy/network/listener.h"
 
 #include "common/buffer/buffer_impl.h"
+#include "common/common/empty_string.h"
 #include "common/runtime/runtime_impl.h"
 #include "common/stats/timespan_impl.h"
 
@@ -18,6 +19,7 @@ namespace DnsFilter {
 constexpr uint16_t DNS_RECORD_CLASS_IN = 1;
 constexpr uint16_t DNS_RECORD_TYPE_A = 1;
 constexpr uint16_t DNS_RECORD_TYPE_AAAA = 28;
+constexpr uint16_t DNS_RECORD_TYPE_SRV = 33;
 
 constexpr uint16_t DNS_RESPONSE_CODE_NO_ERROR = 0;
 constexpr uint16_t DNS_RESPONSE_CODE_FORMAT_ERROR = 1;
@@ -77,6 +79,79 @@ using DnsAnswerRecordPtr = std::unique_ptr<DnsAnswerRecord>;
 using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
 
 /**
+ * DnsSrvRecord represents a single answer record for a service which is to be serialized and
+ * sent to a client. This class inherits core fields from DnsAnswerRecord and adds new fields
+ * inherent to DNS service records
+ */
+class DnsSrvRecord : public DnsAnswerRecord {
+public:
+  DnsSrvRecord(const std::string& service_name, const std::string& proto,
+               const std::chrono::seconds ttl, const uint16_t priority, const uint16_t weight,
+               const uint16_t port, const std::string& target,
+               const uint16_t rec_type = DNS_RECORD_TYPE_SRV,
+               const uint16_t rec_class = DNS_RECORD_CLASS_IN)
+      : DnsAnswerRecord(service_name, rec_type, rec_class, ttl, nullptr), proto_(proto),
+        priority_(priority), weight_(weight), port_(port), target_(target) {}
+
+  bool serialize(Buffer::OwnedImpl& output) override;
+
+  static std::string buildServiceName(const std::string& name, const std::string& proto,
+                                      const std::string& domain) {
+    if (name.empty() || proto.empty() || domain.empty()) {
+      return EMPTY_STRING;
+    }
+
+    std::string result{};
+    if (name[0] != '_') {
+      result += "_";
+    }
+    result += name + ".";
+    if (proto[0] != '_') {
+      result += "_";
+    }
+    result += proto + '.' + domain;
+    return result;
+  }
+
+  static absl::string_view getServiceFromName(const absl::string_view name) {
+    const size_t offset = name.find_first_of('.');
+    if (offset != std::string::npos && offset < name.size()) {
+      size_t start = 0;
+      if (name[start] == '_') {
+        return name.substr(++start, offset - 1);
+      }
+    }
+    return EMPTY_STRING;
+  }
+
+  static absl::string_view getProtoFromName(const absl::string_view name) {
+    size_t start = name.find_first_of('.');
+    if (start != std::string::npos && ++start < name.size() - 1) {
+      if (name[start] == '_') {
+        const size_t offset = name.find_first_of('.', ++start);
+        if (start != std::string::npos && offset < name.size()) {
+          return name.substr(start, offset - start);
+        }
+      }
+    }
+    return EMPTY_STRING;
+  }
+
+  std::string proto_;
+  uint16_t priority_;
+  uint16_t weight_;
+  uint16_t port_;
+  std::string target_;
+};
+
+using DnsSrvRecordPtr = std::unique_ptr<DnsSrvRecord>;
+
+// Store the server record with the full service name as the key to the service config. For
+// each service there can be multiple configs for a given service name. The service can be
+// weighted to distribute connections to multiple hosts, etc.
+using DnsSrvRecordPtrVec = std::vector<DnsSrvRecordPtr>;
+
+/**
  * @brief This struct is used to hold pointers to the counters that are relevant to the
  * parser. This is done to prevent dependency loops between the parser and filter headers
  */
@@ -133,9 +208,9 @@ public:
     Finish
   };
 
-  // The flags have been verified with dig and this structure should not be modified. The flag order
-  // here does not match the RFC, but takes byte ordering into account so that serialization does
-  // not bitwise operations.
+  // The flags have been verified with dig and this structure should not be modified. The flag
+  // order here does not match the RFC, but takes byte ordering into account so that serialization
+  // does not bitwise operations.
   PACKED_STRUCT(struct DnsHeaderFlags {
     unsigned rcode : 4;  // return code
     unsigned cd : 1;     // checking disabled
@@ -168,9 +243,9 @@ public:
         query_latency_histogram_(latency_histogram), rng_(random) {}
 
   /**
-   * @brief Builds an Answer record for the active query. The active query transaction ID is at the
-   * top of a queue. This ID is sufficient enough to determine the answer records associated with
-   * the query
+   * @brief Builds an Answer record for the active query. The active query transaction ID is at
+   * the top of a queue. This ID is sufficient enough to determine the answer records associated
+   * with the query
    */
   DnsAnswerRecordPtr getResponseForQuery();
 
@@ -185,11 +260,33 @@ public:
    * @param buffer a reference to the incoming request object received by the listener
    * @param offset the buffer offset at which parsing is to begin. This parameter is updated when
    * one record is parsed from the buffer and returned to the caller.
-   * @return DnsQueryRecordPtr a pointer to a DnsQueryRecord object containing all query data parsed
-   * from the buffer
+   * @return DnsQueryRecordPtr a pointer to a DnsQueryRecord object containing all query data
+   * parsed from the buffer
    */
-  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
+  DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t& offset);
 
+  struct DnsAnswerCtx {
+    DnsAnswerCtx(const Buffer::InstancePtr& buffer, const std::string& record_name,
+                 const uint16_t record_type, const uint16_t record_class,
+                 const uint16_t available_bytes, const uint16_t data_length, const uint32_t ttl,
+                 uint64_t& offset)
+        : buffer_(buffer), record_name_(record_name), record_type_(record_type),
+          record_class_(record_class), available_bytes_(available_bytes), data_length_(data_length),
+          ttl_(ttl), offset_(offset) {}
+
+    const Buffer::InstancePtr& buffer_;
+    const std::string& record_name_;
+    const uint16_t record_type_;
+    const uint16_t record_class_;
+    const uint16_t available_bytes_;
+    const uint16_t data_length_;
+    const uint32_t ttl_;
+    uint64_t& offset_;
+  };
+
+  DnsAnswerRecordPtr parseDnsARecord(DnsAnswerCtx& context);
+
+  DnsSrvRecordPtr parseDnsSrvRecord(DnsAnswerCtx& context);
   /**
    * @brief parse a single answer record from a client request
    *
@@ -199,17 +296,28 @@ public:
    * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
    * parsed from the buffer
    */
-  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t* offset);
+  DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t& offset);
 
+  /**
+   * @brief Constructs a DNS SRV Answer record for a given service and stores the object in a map
+   * where the response is associated with query name
+   *
+   * @param context the query context for which we are generating a response
+   * @param query_rec to which the answer is matched.
+   * @param service the service that is returned in the answer record
+   */
+  void storeDnsSrvAnswerRecord(DnsQueryContextPtr& context, const DnsQueryRecord& query_rec,
+                               const DnsSrvRecordPtr& service);
   /**
    * @brief Constructs a DNS Answer record for a given IP Address and stores the object in a map
    * where the response is associated with query name
    *
-   * @param query_record to which the answer is matched.
+   * @param context the query context for which we are generating a response
+   * @param query_rec to which the answer is matched.
    * @param ttl the TTL specifying how long the returned answer is cached
    * @param ipaddr the address that is returned in the answer record
    */
-  void buildDnsAnswerRecord(DnsQueryContextPtr& context, const DnsQueryRecord& query_rec,
+  void storeDnsAnswerRecord(DnsQueryContextPtr& context, const DnsQueryRecord& query_rec,
                             const std::chrono::seconds ttl,
                             Network::Address::InstanceConstSharedPtr ipaddr);
 
@@ -258,11 +366,11 @@ private:
    *
    * @param buffer the buffer from which the name is extracted
    * @param available_bytes the size of the remaining bytes in the buffer on which we can operate
-   * @param name_offset the offset from which parsing begins and ends. The updated value is returned
-   * to the caller
+   * @param name_offset the offset from which parsing begins and ends. The updated value is
+   * returned to the caller
    */
-  const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t* available_bytes,
-                                       uint64_t* name_offset);
+  const std::string parseDnsNameRecord(const Buffer::InstancePtr& buffer, uint64_t& available_bytes,
+                                       uint64_t& name_offset);
 
   bool recursion_available_;
   TimeSource& timesource_;
