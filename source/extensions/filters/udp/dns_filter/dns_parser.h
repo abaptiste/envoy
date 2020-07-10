@@ -18,6 +18,7 @@ namespace DnsFilter {
 
 constexpr uint16_t DNS_RECORD_CLASS_IN = 1;
 constexpr uint16_t DNS_RECORD_TYPE_A = 1;
+constexpr uint16_t DNS_RECORD_TYPE_NS = 2;
 constexpr uint16_t DNS_RECORD_TYPE_AAAA = 28;
 constexpr uint16_t DNS_RECORD_TYPE_SRV = 33;
 
@@ -40,6 +41,9 @@ public:
   const std::string name_;
   const uint16_t type_;
   const uint16_t class_;
+
+protected:
+  bool serializeSpecificName(Buffer::OwnedImpl& output, const std::string& name);
 };
 
 /**
@@ -187,6 +191,8 @@ public:
   Network::DnsResolver::ResolutionStatus resolution_status_;
   DnsQueryPtrVec queries_;
   DnsAnswerMap answers_;
+  // DnsAnswerMap authority_;
+  DnsAnswerMap additional_;
 };
 
 using DnsQueryContextPtr = std::unique_ptr<DnsQueryContext>;
@@ -298,6 +304,19 @@ public:
    */
   DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t& offset);
 
+#if 0
+  void storeDnsAuthorityNSRecord(DnsQueryContextPtr& context, const absl::string_view name,
+                                const uint16_t rec_type, const uint16_t rec_class,
+                                const std::chrono::seconds ttl,
+                                Network::Address::InstanceConstSharedPtr ipaddr);
+#endif
+  bool parseAnswerRecords(DnsAnswerMap& answers, const uint16_t answer_count,
+                          const Buffer::InstancePtr& buffer, uint64_t& offset);
+
+  void storeDnsAdditionalRecord(DnsQueryContextPtr& context, const absl::string_view name,
+                                const uint16_t rec_type, const uint16_t rec_class,
+                                const std::chrono::seconds ttl,
+                                Network::Address::InstanceConstSharedPtr ipaddr);
   /**
    * @brief Constructs a DNS SRV Answer record for a given service and stores the object in a map
    * where the response is associated with query name
@@ -359,7 +378,8 @@ private:
    * @param answers specify the number of answer records contained in the response
    */
   void setDnsResponseFlags(DnsQueryContextPtr& context, const uint16_t questions,
-                           const uint16_t answers);
+                           const uint16_t answers, const uint16_t authority_rrs,
+                           const uint16_t additional_rrs);
 
   /**
    * @brief Extracts a DNS query name from a buffer

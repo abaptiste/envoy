@@ -38,13 +38,6 @@ std::string getProtoName(const DnsTable::DnsServiceProtocol& protocol) {
   return proto;
 }
 
-char* getStringPointer(std::string* data, size_t data_length) {
-  const size_t length = std::min(std::max(MAX_LABEL_LENGTH, data_length), MAX_NAME_LENGTH);
-  data->reserve(length);
-  data->resize(length - 1);
-  return &((*data)[0]);
-}
-
 } // namespace Utils
 } // namespace DnsFilter
 } // namespace UdpFilters

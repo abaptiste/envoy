@@ -422,15 +422,53 @@ bool DnsFilter::resolveConfiguredService(DnsQueryContextPtr& context, const DnsQ
   }
 
   // Build an answer record from each configured service
-  uint64_t services_found = 0;
+  std::list<absl::string_view> targets_discovered;
+
   for (const auto& configured_service : *configured_service_list) {
-    ++services_found;
     incrementLocalQueryTypeAnswerCount(query.type_);
     ENVOY_LOG(debug, "using local service host {} for domain [{}]", configured_service->target_,
               query.name_);
     message_parser_.storeDnsSrvAnswerRecord(context, query, configured_service);
+    targets_discovered.emplace_back(configured_service->target_);
+
+    // for each target address, we need to resolve the address.  The target record
+    // does not specify the address type for the name. It is possible that the targets'
+    // IP addresses are a mix of A and AAAA records.
   }
-  return (services_found != 0);
+
+  for (const auto& target : targets_discovered) {
+    const auto* configured_address_list = getAddressListForDomain(target);
+    if (configured_address_list == nullptr) {
+      ENVOY_LOG(debug, "Could not find an address list entry for SRV target [{}]", target);
+      return false;
+    }
+
+    for (const auto& configured_address : *configured_address_list) {
+      ASSERT(configured_address != nullptr);
+
+      // Since there is no target type, only a name, we must determine the record type from the
+      // parsed address
+      ENVOY_LOG(debug, "using address {} for target [{}]",
+                configured_address->ip()->addressAsString(), target);
+      const std::chrono::seconds ttl = getDomainTTL(target);
+
+      uint16_t type;
+      if (configured_address->ip()->ipv4()) {
+        type = DNS_RECORD_TYPE_A;
+      } else if (configured_address->ip()->ipv6()) {
+        type = DNS_RECORD_TYPE_AAAA;
+      } else {
+        // Skip the record
+        continue;
+      }
+
+      incrementLocalQueryTypeAnswerCount(type);
+      message_parser_.storeDnsAdditionalRecord(context, target, query.class_, type, ttl,
+                                               configured_address);
+    }
+  }
+
+  return (!targets_discovered.empty());
 }
 
 bool DnsFilter::resolveViaConfiguredHosts(DnsQueryContextPtr& context,

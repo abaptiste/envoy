@@ -1215,10 +1215,14 @@ TEST_F(DnsFilterTest, ConsumeExternalTableWithServicesTest) {
   EXPECT_EQ(DNS_RESPONSE_CODE_NO_ERROR, response_parser_->getQueryResponseCode());
   EXPECT_EQ(3, query_ctx_->answers_.size());
 
-  std::map<uint16_t, std::string> validation_map = {{10, "backup.voip.subzero.com"},
-                                                    {20, "secondary.voip.subzero.com"},
-                                                    {30, "primary.voip.subzero.com"}};
+  std::map<uint16_t, std::string> validation_map = {
+      {10, "backup.voip.subzero.com"},
+      {20, "secondary.voip.subzero.com"},
+      {30, "primary.voip.subzero.com"},
+  };
 
+  // Validate the priority for each SRV record.  The TTL and priority are the same value for each
+  // entry
   for (const auto& answer : query_ctx_->answers_) {
     EXPECT_EQ(answer.second->type_, DNS_RECORD_TYPE_SRV);
 
@@ -1232,10 +1236,24 @@ TEST_F(DnsFilterTest, ConsumeExternalTableWithServicesTest) {
     EXPECT_STREQ(target.c_str(), srv_rec->target_.c_str());
   }
 
+  // Valdiate additional records from the SRV query
+  const std::map<std::string, std::string> target_map = {
+      {"primary.voip.subzero.com", "10.0.3.1"},
+      {"secondary.voip.subzero.com", "10.0.3.2"},
+      {"backup.voip.subzero.com", "10.0.3.3"},
+  };
+
+  for (const auto& answer : query_ctx_->additional_) {
+    const auto& entry = target_map.find(answer.first);
+    EXPECT_NE(entry, target_map.end());
+    Utils::verifyAddress({entry->second}, answer.second);
+  }
+
   // Validate stats
   EXPECT_EQ(1, config_->stats().downstream_rx_queries_.value());
   EXPECT_EQ(1, config_->stats().known_domain_queries_.value());
   EXPECT_EQ(3, config_->stats().local_srv_record_answers_.value());
+  EXPECT_EQ(3, config_->stats().local_a_record_answers_.value());
   EXPECT_EQ(1, config_->stats().srv_record_queries_.value());
 }
 
@@ -1340,17 +1358,6 @@ TEST_F(DnsFilterTest, UtilsProtoNameTest) {
 
     EXPECT_STREQ(proto_name.c_str(), proto.second.c_str());
   }
-}
-
-TEST_F(DnsFilterTest, UtilsStringPointerTest) {
-  constexpr char contents[256] = "abcdefghijklmnopqrstuvwxyz";
-  std::string test_string{};
-
-  char* output = Utils::getStringPointer(&test_string, sizeof(contents));
-  strncpy(output, contents, sizeof(contents));
-
-  EXPECT_NE(nullptr, output);
-  EXPECT_STREQ(contents, test_string.c_str());
 }
 
 TEST_F(DnsFilterTest, ServiceNameSynthesisTest) {

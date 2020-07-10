@@ -14,19 +14,19 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
+bool BaseDnsRecord::serializeSpecificName(Buffer::OwnedImpl& output, const std::string& name) {
   // Iterate over a name e.g. "www.domain.com" once and produce a buffer containing each name
   // segment prefixed by its length
   static constexpr char SEPARATOR = '.';
 
   // Names are restricted to 255 bytes per RFC
-  if (name_.size() > Utils::MAX_NAME_LENGTH) {
+  if (name.size() > Utils::MAX_NAME_LENGTH) {
     return false;
   }
 
   size_t last = 0;
-  size_t count = name_.find_first_of(SEPARATOR);
-  auto iter = name_.begin();
+  size_t count = name.find_first_of(SEPARATOR);
+  auto iter = name.begin();
 
   while (count != std::string::npos) {
     if ((count - last) > Utils::MAX_LABEL_LENGTH) {
@@ -48,11 +48,11 @@ bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
     // Move our last marker to the first position after where we stopped. Search for the next name
     // separator
     last += count;
-    count = name_.find_first_of(SEPARATOR, ++last);
+    count = name.find_first_of(SEPARATOR, ++last);
   }
 
   // Write the remaining segment prepended by its length
-  count = name_.size() - last;
+  count = name.size() - last;
   output.writeBEInt<uint8_t>(count);
   for (size_t i = 0; i < count; i++) {
     output.writeByte(*iter++);
@@ -61,6 +61,9 @@ bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
   // Terminate the name record with a null byte
   output.writeByte(0x00);
   return true;
+}
+bool BaseDnsRecord::serializeName(Buffer::OwnedImpl& output) {
+  return serializeSpecificName(output, name_);
 }
 
 // Serialize a DNS Query Record
@@ -105,18 +108,17 @@ bool DnsSrvRecord::serialize(Buffer::OwnedImpl& output) {
     output.writeBEInt<uint16_t>(class_);
     output.writeBEInt<uint32_t>(static_cast<uint32_t>(ttl_.count()));
 
-    // data length includes priority, weight, port, and target name
-    uint16_t data_length = sizeof(priority_) + sizeof(weight_) + sizeof(port_) + target_.size();
-    output.writeBEInt<uint16_t>(data_length);
-    output.writeBEInt<uint16_t>(priority_);
-    output.writeBEInt<uint16_t>(weight_);
-    output.writeBEInt<uint16_t>(port_);
-
-    auto iter = target_.begin();
-    for (size_t i = 0; i < target_.size(); i++) {
-      output.writeByte(*iter++);
+    Buffer::OwnedImpl target;
+    if (serializeSpecificName(target, target_)) {
+      const uint16_t data_length =
+          sizeof(priority_) + sizeof(weight_) + sizeof(port_) + target.length();
+      output.writeBEInt<uint16_t>(data_length);
+      output.writeBEInt<uint16_t>(priority_);
+      output.writeBEInt<uint16_t>(weight_);
+      output.writeBEInt<uint16_t>(port_);
+      output.move(target);
+      return true;
     }
-    return true;
   }
   return false;
 }
@@ -236,8 +238,19 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     context->queries_.push_back(std::move(rec));
   }
 
+  if (header_.answers && !parseAnswerRecords(context->answers_, header_.answers, buffer, offset)) {
+    return false;
+  }
+
+  if (header_.additional_rrs &&
+      !parseAnswerRecords(context->additional_, header_.additional_rrs, buffer, offset)) {
+    return false;
+  }
+
+#if 0
   // Parse all answer records and store them. This is exercised primarily in tests to
   // verify the responses returned from the filter.
+  context->answers_.reserve(header_.answers);
   for (auto index = 0; index < header_.answers; index++) {
     ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, header_.answers);
     auto rec = parseDnsAnswerRecord(buffer, offset);
@@ -249,6 +262,37 @@ bool DnsMessageParser::parseDnsObject(DnsQueryContextPtr& context,
     context->answers_.emplace(name, std::move(rec));
   }
 
+  // Parse all additional records and store them. This is exercised primarily in tests to
+  // verify the responses returned from the filter.
+  context->additional_.reserve(header_.additional_rrs);
+  for (auto index = 0; index < header_.additional_rrs; index++) {
+    ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, header_.additional_rrs);
+    auto rec = parseDnsAnswerRecord(buffer, offset);
+    if (rec == nullptr) {
+      ENVOY_LOG(debug, "Couldn't parse answer record from buffer");
+      return false;
+    }
+    const std::string name = rec->name_;
+    context->additional_.emplace(name, std::move(rec));
+  }
+#endif
+
+  return true;
+}
+
+bool DnsMessageParser::parseAnswerRecords(DnsAnswerMap& answers, const uint16_t answer_count,
+                                          const Buffer::InstancePtr& buffer, uint64_t& offset) {
+  answers.reserve(answer_count);
+  for (auto index = 0; index < answer_count; index++) {
+    ENVOY_LOG(trace, "Parsing [{}/{}] answers", index, answer_count);
+    auto rec = parseDnsAnswerRecord(buffer, offset);
+    if (rec == nullptr) {
+      ENVOY_LOG(debug, "Couldn't parse answer record from buffer");
+      return false;
+    }
+    const std::string name = rec->name_;
+    answers.emplace(name, std::move(rec));
+  }
   return true;
 }
 
@@ -319,7 +363,7 @@ DnsSrvRecordPtr DnsMessageParser::parseDnsSrvRecord(DnsAnswerCtx& ctx) {
     return nullptr;
   }
 
-  const uint64_t available_bytes = ctx.buffer_->length() - ctx.offset_;
+  uint64_t available_bytes = ctx.buffer_->length() - ctx.offset_;
   if (available_bytes < data_length) {
     ENVOY_LOG(debug, "No data left in buffer for reading SRV answer record");
     return nullptr;
@@ -328,28 +372,19 @@ DnsSrvRecordPtr DnsMessageParser::parseDnsSrvRecord(DnsAnswerCtx& ctx) {
   uint16_t priority;
   priority = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
   ctx.offset_ += sizeof(uint16_t);
-  data_length -= sizeof(uint16_t);
+  available_bytes -= sizeof(uint16_t);
 
   uint16_t weight;
   weight = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
   ctx.offset_ += sizeof(uint16_t);
-  data_length -= sizeof(uint16_t);
+  available_bytes -= sizeof(uint16_t);
 
   uint16_t port;
   port = ctx.buffer_->peekBEInt<uint16_t>(ctx.offset_);
   ctx.offset_ += sizeof(uint16_t);
-  data_length -= sizeof(uint16_t);
+  available_bytes -= sizeof(uint16_t);
 
-  if (data_length == 0) {
-    ENVOY_LOG(debug, "Insufficient data to parse complete SRV Record");
-    return nullptr;
-  }
-
-  std::string target_name;
-  ctx.buffer_->copyOut(ctx.offset_, data_length,
-                       Utils::getStringPointer(&target_name, data_length + 1));
-
-  ctx.offset_ += data_length;
+  const std::string target_name = parseDnsNameRecord(ctx.buffer_, available_bytes, ctx.offset_);
 
   const absl::string_view proto = DnsSrvRecord::getProtoFromName(ctx.record_name_);
 
@@ -504,7 +539,9 @@ DnsQueryRecordPtr DnsMessageParser::parseDnsQueryRecord(const Buffer::InstancePt
 }
 
 void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
-                                           const uint16_t questions, const uint16_t answers) {
+                                           const uint16_t questions, const uint16_t answers,
+                                           const uint16_t authority_rrs,
+                                           const uint16_t additional_rrs) {
   // Copy the transaction ID
   response_header_.id = header_.id;
 
@@ -534,9 +571,35 @@ void DnsMessageParser::setDnsResponseFlags(DnsQueryContextPtr& query_context,
   // Set the number of questions from the incoming query
   response_header_.questions = questions;
 
-  // We will not include any additional records
-  response_header_.authority_rrs = 0;
-  response_header_.additional_rrs = 0;
+  response_header_.authority_rrs = authority_rrs;
+  response_header_.additional_rrs = additional_rrs;
+}
+
+#if 0
+void DnsMessageParser::storeDnsAuthorityNSRecord(DnsQueryContextPtr& context,
+                                                 const absl::string_view name,
+                                                 const uint16_t rec_type, const uint16_t rec_class,
+                                                 const std::chrono::seconds ttl,
+                                                 Network::Address::InstanceConstSharedPtr ipaddr) {
+  UNREFERENCED_PARAMETER(name);
+  UNREFERENCED_PARAMETER(rec_class);
+
+  const std::string rec_name("ns.voip.subzero.com");
+  auto answer_record =
+      std::make_unique<DnsAnswerRecord>(rec_name, rec_type, 2, ttl, std::move(ipaddr));
+  context->authority_.emplace(rec_name, std::move(answer_record));
+}
+#endif
+
+void DnsMessageParser::storeDnsAdditionalRecord(DnsQueryContextPtr& context,
+                                                const absl::string_view name,
+                                                const uint16_t rec_type, const uint16_t rec_class,
+                                                const std::chrono::seconds ttl,
+                                                Network::Address::InstanceConstSharedPtr ipaddr) {
+  const std::string rec_name(name);
+  auto answer_record =
+      std::make_unique<DnsAnswerRecord>(rec_name, rec_type, rec_class, ttl, std::move(ipaddr));
+  context->additional_.emplace(rec_name, std::move(answer_record));
 }
 
 void DnsMessageParser::storeDnsAnswerRecord(DnsQueryContextPtr& context,
@@ -634,6 +697,8 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   uint64_t total_buffer_size = sizeof(DnsHeaderFlags);
   uint16_t serialized_answers = 0;
   uint16_t serialized_queries = 0;
+  uint16_t serialized_authority_rrs = 0;
+  uint16_t serialized_additional_rrs = 0;
 
   Buffer::OwnedImpl query_buffer{};
   Buffer::OwnedImpl answer_buffer{};
@@ -702,10 +767,64 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
         break;
       }
     }
+#if 0
+    // Serialize Authority Resource Records
+    const auto& authority_rrs = query_context->authority_;
+    if (!authority_rrs.empty()) {
+      const size_t num_rrs = authority_rrs.size();
+      const auto rr = authority_rrs.begin();
+      while (serialized_authority_rrs < num_rrs) {
+        Buffer::OwnedImpl serialized_rr;
+        if (!rr->second->serialize(serialized_rr)) {
+          ENVOY_LOG(debug, "Unable to serialize authotiry record for {}", query->name_);
+          continue;
+        }
+
+        const uint64_t serialized_rr_length = serialized_rr.length();
+        if ((total_buffer_size + serialized_rr_length) > MAX_DNS_RESPONSE_SIZE) {
+          break;
+        }
+
+        total_buffer_size += serialized_rr_length;
+        answer_buffer.add(serialized_rr);
+        if (++serialized_authority_rrs == MAX_RETURNED_RECORDS) {
+          break;
+        }
+      }
+    }
+#endif
+
+    // Serialize Addtional Resource Records
+    const auto& additional_rrs = query_context->additional_;
+    if (!additional_rrs.empty()) {
+      const size_t num_rrs = additional_rrs.size();
+      auto rr = additional_rrs.begin();
+      while (serialized_additional_rrs < num_rrs) {
+        Buffer::OwnedImpl serialized_rr;
+        if (!rr->second->serialize(serialized_rr)) {
+          ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
+          continue;
+        }
+
+        const uint64_t serialized_rr_length = serialized_rr.length();
+        if ((total_buffer_size + serialized_rr_length) > MAX_DNS_RESPONSE_SIZE) {
+          break;
+        }
+
+        total_buffer_size += serialized_rr_length;
+        answer_buffer.add(serialized_rr);
+        if (++serialized_additional_rrs == MAX_RETURNED_RECORDS) {
+          break;
+        }
+
+        ++rr;
+      }
+    }
   }
 
   setResponseCode(query_context, serialized_queries, serialized_answers);
-  setDnsResponseFlags(query_context, serialized_queries, serialized_answers);
+  setDnsResponseFlags(query_context, serialized_queries, serialized_answers,
+                      serialized_authority_rrs, serialized_additional_rrs);
 
   // Build the response buffer for transmission to the client
   buffer.writeBEInt<uint16_t>(response_header_.id);
