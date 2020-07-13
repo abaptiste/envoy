@@ -50,7 +50,7 @@ message DnsTable {
     }
   }
 
-  // This message contains a list of service records returned for a service query in a domain
+  // This message defines a service selection record returned for a service query in a domain
   // [#next-free-field: 8]
   message DnsService {
     // The name of the service without the protocol or domain name
@@ -76,6 +76,7 @@ message DnsTable {
         [(validate.rules).string = {min_len: 2 well_known_regex: HTTP_HEADER_NAME}];
   }
 
+  // Define a list of service records for a given service
   message DnsServiceList {
     repeated DnsService dns_services = 1 [(validate.rules).repeated = {min_items: 1}];
   }

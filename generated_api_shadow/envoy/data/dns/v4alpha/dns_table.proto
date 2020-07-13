@@ -53,7 +53,7 @@ message DnsTable {
     }
   }
 
-  // This message contains a list of service records returned for a service query in a domain
+  // This message defines a service selection record returned for a service query in a domain
   // [#next-free-field: 8]
   message DnsService {
     option (udpa.annotations.versioning).previous_message_type =
@@ -82,6 +82,7 @@ message DnsTable {
         [(validate.rules).string = {min_len: 2 well_known_regex: HTTP_HEADER_NAME}];
   }
 
+  // Define a list of service records for a given service
   message DnsServiceList {
     option (udpa.annotations.versioning).previous_message_type =
         "envoy.data.dns.v3.DnsTable.DnsServiceList";
