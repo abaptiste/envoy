@@ -107,16 +107,16 @@ other query, it will forward upstream to external resolvers. The filter will ret
 matching the input query type. If the query is for type A records and no A records are configured,
 Envoy will return no addresses and set the response code appropriately. Conversely, if there are
 matching records for the query type, each configured address is returned. This is also true for
-AAAA records. Only A, AAAA, and SRV records are supported. If the filter parses other queries for other
-record types, the filter immediately responds indicating that the query is not supported. The
+AAAA records. Only A, AAAA, and SRV records are supported. If the filter parses queries for other
+record types, the filter immediately responds indicating that the type is not supported. The
 filter can also redirect a query for a DNS name to the enpoints of a cluster. "www.domain4.com"
 in the configuration demonstrates this. Along with an address list, a cluster name is a valid
 endpoint for a DNS name.
 
-The DNS Filter now supports responding to SRV Records. The records for "domain5.com" illustrate
-the configuration necessary to support responding to SRV records. The "target_addresses" populated
-in the configuration must be fully qualified domain names. These target_addresses can be defined
-in the DNS Filter config so that Envoy can resolve the target hosts' IP addresses. The "protocol"
+The DNS filter now supports responding to SRV Records. The records for "domain5.com" illustrate
+the configuration necessary to support responding to SRV records. The "target_address" populated
+in the configuration must be fully qualified domain names. These target addresses must be defined
+in the DNS Filter table so that Envoy can resolve the target hosts' IP addresses. The "protocol"
 of the SRV record can be defined by a name or number. As configured in the example, the filter 
 will successfully respond to SRV record requests for "_sip._tcp.voip.domain5.com". 
 
