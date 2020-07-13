@@ -1221,7 +1221,7 @@ TEST_F(DnsFilterTest, ConsumeExternalTableWithServicesTest) {
       {30, "primary.voip.subzero.com"},
   };
 
-  // Validate the priority for each SRV record.  The TTL and priority are the same value for each
+  // Validate the priority for each SRV record. The TTL and priority are the same value for each
   // entry
   for (const auto& answer : query_ctx_->answers_) {
     EXPECT_EQ(answer.second->type_, DNS_RECORD_TYPE_SRV);
@@ -1236,7 +1236,7 @@ TEST_F(DnsFilterTest, ConsumeExternalTableWithServicesTest) {
     EXPECT_STREQ(target.c_str(), srv_rec->target_.c_str());
   }
 
-  // Valdiate additional records from the SRV query
+  // Validate additional records from the SRV query
   const std::map<std::string, std::string> target_map = {
       {"primary.voip.subzero.com", "10.0.3.1"},
       {"secondary.voip.subzero.com", "10.0.3.2"},

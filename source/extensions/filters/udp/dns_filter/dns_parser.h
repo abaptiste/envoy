@@ -290,29 +290,58 @@ public:
     uint64_t& offset_;
   };
 
+  /**
+   * @brief parse an A or AAAA DNS Record
+   *
+   * @param context the query context for which we are generating a response
+   * @return DnsAnswerRecordPtr a pointer to a DnsAnswerRecord object containing the parsed answer
+   * record
+   */
   DnsAnswerRecordPtr parseDnsARecord(DnsAnswerCtx& context);
 
-  DnsSrvRecordPtr parseDnsSrvRecord(DnsAnswerCtx& context);
   /**
-   * @brief parse a single answer record from a client request
+   * @brief parse a Server Selection (SRV) DNS Record
    *
-   * @param buffer a reference to a buffer containing a DNS response
+   * @param context the query context for which we are generating a response
+   * @return DnsSrvRecordPtr a pointer to a DnsSrvRecord object containing the parsed server record
+   */
+  DnsSrvRecordPtr parseDnsSrvRecord(DnsAnswerCtx& context);
+
+  /**
+   * @brief parse a single answer record from a client request or filter response
+   *
+   * @param buffer a reference to a buffer containing a DNS request or response
    * @param offset the buffer offset at which parsing is to begin. This parameter is updated when
    * one record is parsed from the buffer and returned to the caller.
-   * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all answer data
-   * parsed from the buffer
+   * @return DnsQueryRecordPtr a pointer to a DnsAnswerRecord object containing all query and answer
+   * data parsed from the buffer
    */
   DnsAnswerRecordPtr parseDnsAnswerRecord(const Buffer::InstancePtr& buffer, uint64_t& offset);
 
-#if 0
-  void storeDnsAuthorityNSRecord(DnsQueryContextPtr& context, const absl::string_view name,
-                                const uint16_t rec_type, const uint16_t rec_class,
-                                const std::chrono::seconds ttl,
-                                Network::Address::InstanceConstSharedPtr ipaddr);
-#endif
+  /**
+   * @brief Parse answer records using a single function. Answer records follow a common format
+   * so one function will suffice for reading them.
+   *
+   * @param answers a reference to the map containing the parsed records
+   * @param answer_count the indicated number of records we expect parsed from the request header
+   * @param buffer a reference to a buffer containing a DNS request or response
+   * @param offset a reference to an index into the buffer indicating the position where reading may
+   * begin
+   */
   bool parseAnswerRecords(DnsAnswerMap& answers, const uint16_t answer_count,
                           const Buffer::InstancePtr& buffer, uint64_t& offset);
 
+  /**
+   * @brief store Additional Resource Records in a separate collection from DNS answers
+   *
+   * @param context the query context for which we are generating a response
+   * @param name the name of the record being stored
+   * @param rec_type the type of the record being stored
+   * @param rec_class the class of the record being stored
+   * @param ttl the Time-to-live of the record being stored
+   * @param ipaddr the ip of the record being stored. In the case of SRV records, this is
+   * the address of a target node referenced by an SRV record entry
+   */
   void storeDnsAdditionalRecord(DnsQueryContextPtr& context, const absl::string_view name,
                                 const uint16_t rec_type, const uint16_t rec_class,
                                 const std::chrono::seconds ttl,

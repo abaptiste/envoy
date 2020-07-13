@@ -117,8 +117,7 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
       }
     }
 
-    // A name can be redirected to only one cluster. If there is more than one cluster defined, the
-    // last entry parsed will be the one available for lookups
+    // A DNS name can be redirected to only one cluster.
     const absl::string_view cluster_name = virtual_domain.endpoint().cluster_name();
     if (!cluster_name.empty()) {
       DnsEndpointConfig endpoint_config{};
@@ -395,79 +394,67 @@ bool DnsFilter::resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRe
 
 bool DnsFilter::resolveConfiguredDomain(DnsQueryContextPtr& context, const DnsQueryRecord& query) {
   const auto* configured_address_list = getAddressListForDomain(query.name_);
-  if (configured_address_list == nullptr) {
-    ENVOY_LOG(debug, "Domain [{}] address list was not found", query.name_);
-    return false;
-  }
-
   uint64_t hosts_found = 0;
-  // Build an answer record from each configured IP address
-  for (const auto& configured_address : *configured_address_list) {
-    ASSERT(configured_address != nullptr);
-    incrementLocalQueryTypeAnswerCount(query.type_);
-    ENVOY_LOG(debug, "using local address {} for domain [{}]",
-              configured_address->ip()->addressAsString(), query.name_);
-    ++hosts_found;
-    const std::chrono::seconds ttl = getDomainTTL(query.name_);
-    message_parser_.storeDnsAnswerRecord(context, query, ttl, configured_address);
+  if (configured_address_list != nullptr) {
+    // Build an answer record from each configured IP address
+    for (const auto& configured_address : *configured_address_list) {
+      ASSERT(configured_address != nullptr);
+      incrementLocalQueryTypeAnswerCount(query.type_);
+      ENVOY_LOG(debug, "using local address {} for domain [{}]",
+                configured_address->ip()->addressAsString(), query.name_);
+      ++hosts_found;
+      const std::chrono::seconds ttl = getDomainTTL(query.name_);
+      message_parser_.storeDnsAnswerRecord(context, query, ttl, configured_address);
+    }
   }
   return (hosts_found != 0);
 }
 
 bool DnsFilter::resolveConfiguredService(DnsQueryContextPtr& context, const DnsQueryRecord& query) {
   const auto* configured_service_list = getServiceListForDomain(query.name_);
-  if (configured_service_list == nullptr) {
-    ENVOY_LOG(debug, "Domain [{}] service list was not found", query.name_);
-    return false;
-  }
-
-  // Build an answer record from each configured service
   std::list<absl::string_view> targets_discovered;
-
-  for (const auto& configured_service : *configured_service_list) {
-    incrementLocalQueryTypeAnswerCount(query.type_);
-    ENVOY_LOG(debug, "using local service host {} for domain [{}]", configured_service->target_,
-              query.name_);
-    message_parser_.storeDnsSrvAnswerRecord(context, query, configured_service);
-    targets_discovered.emplace_back(configured_service->target_);
-
-    // for each target address, we need to resolve the address.  The target record
-    // does not specify the address type for the name. It is possible that the targets'
-    // IP addresses are a mix of A and AAAA records.
-  }
-
-  for (const auto& target : targets_discovered) {
-    const auto* configured_address_list = getAddressListForDomain(target);
-    if (configured_address_list == nullptr) {
-      ENVOY_LOG(debug, "Could not find an address list entry for SRV target [{}]", target);
-      return false;
+  if (configured_service_list != nullptr) {
+    // Build an answer record from each configured service
+    for (const auto& configured_service : *configured_service_list) {
+      incrementLocalQueryTypeAnswerCount(query.type_);
+      ENVOY_LOG(debug, "using local service host {} for domain [{}]", configured_service->target_,
+                query.name_);
+      message_parser_.storeDnsSrvAnswerRecord(context, query, configured_service);
+      targets_discovered.emplace_back(configured_service->target_);
     }
 
-    for (const auto& configured_address : *configured_address_list) {
-      ASSERT(configured_address != nullptr);
+    // for each target address, we must resolve the address. The target record does not specify the
+    // address type for the name. It is possible that the targets' IP addresses are a mix of A and
+    // AAAA records.
+    for (const auto& target : targets_discovered) {
+      const auto* configured_address_list = getAddressListForDomain(target);
+      if (configured_address_list != nullptr) {
+        for (const auto& configured_address : *configured_address_list) {
+          ASSERT(configured_address != nullptr);
 
-      // Since there is no target type, only a name, we must determine the record type from the
-      // parsed address
-      ENVOY_LOG(debug, "using address {} for target [{}]",
-                configured_address->ip()->addressAsString(), target);
-      const std::chrono::seconds ttl = getDomainTTL(target);
+          // Since there is no target type, only a name, we must determine the record type from the
+          // parsed address
+          ENVOY_LOG(debug, "using address {} for target [{}] in SRV record",
+                    configured_address->ip()->addressAsString(), target);
+          const std::chrono::seconds ttl = getDomainTTL(target);
 
-      uint16_t type;
-      if (configured_address->ip()->ipv4()) {
-        type = DNS_RECORD_TYPE_A;
-      } else if (configured_address->ip()->ipv6()) {
-        type = DNS_RECORD_TYPE_AAAA;
-      } else {
-        // Skip the record
-        continue;
+          uint16_t type;
+          if (configured_address->ip()->ipv4()) {
+            type = DNS_RECORD_TYPE_A;
+          } else if (configured_address->ip()->ipv6()) {
+            type = DNS_RECORD_TYPE_AAAA;
+          } else {
+            // Skip the record since the address must be either ipv4 or ipv6
+            continue;
+          }
+
+          incrementLocalQueryTypeAnswerCount(type);
+          message_parser_.storeDnsAdditionalRecord(context, target, query.class_, type, ttl,
+                                                   configured_address);
+        }
       }
-
-      incrementLocalQueryTypeAnswerCount(type);
-      message_parser_.storeDnsAdditionalRecord(context, target, query.class_, type, ttl,
-                                               configured_address);
     }
   }
-
   return (!targets_discovered.empty());
 }
 

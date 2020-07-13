@@ -115,9 +115,9 @@ endpoint for a DNS name.
 
 The DNS Filter now supports responding to SRV Records. The records for "domain5.com" illustrate
 the configuration necessary to support responding to SRV records. The "target_addresses" populated
-in the configuration must be fully qualified domain names.  These target_addresses can be defined
-in the DNS Filter config so that Envoy can resolve the target hosts' IP addresses.  The "protocol"
-of the SRV record can be defined by a name or number.  As configured in the example, the filter 
+in the configuration must be fully qualified domain names. These target_addresses can be defined
+in the DNS Filter config so that Envoy can resolve the target hosts' IP addresses. The "protocol"
+of the SRV record can be defined by a name or number. As configured in the example, the filter 
 will successfully respond to SRV record requests for "_sip._tcp.voip.domain5.com". 
 
 The filter can also consume its domain configuration from an external DNS table. The same entities

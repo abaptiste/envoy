@@ -175,8 +175,24 @@ private:
    */
   bool resolveViaClusters(DnsQueryContextPtr& context, const DnsQueryRecord& query);
 
+  /**
+   * @brief Resolves the supplied query from the configured set of domains
+   *
+   * @param context object containing the query context
+   * @param query query object containing the name to be resolved
+   * @return bool true if the requested name matched a cluster and an answer record was constructed
+   */
   bool resolveConfiguredDomain(DnsQueryContextPtr& context, const DnsQueryRecord& query);
+
+  /**
+   * @brief Resolves the supplied query from configured services
+   *
+   * @param context object containing the query context
+   * @param query query object containing the name to be resolved
+   * @return bool true if the requested name matched a cluster and an answer record was constructed
+   */
   bool resolveConfiguredService(DnsQueryContextPtr& context, const DnsQueryRecord& query);
+
   /**
    * @brief Resolves the supplied query from configured hostnames or services
    *
