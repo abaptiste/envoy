@@ -50,7 +50,7 @@ message DnsTable {
     }
   }
 
-  // This message contains a list of service records returned for a serivce query in a domain
+  // This message contains a list of service records returned for a service query in a domain
   // [#next-free-field: 8]
   message DnsService {
     // The name of the service without the protocol or domain name

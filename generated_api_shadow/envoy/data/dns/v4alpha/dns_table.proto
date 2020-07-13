@@ -53,7 +53,7 @@ message DnsTable {
     }
   }
 
-  // This message contains a list of service records returned for a serivce query in a domain
+  // This message contains a list of service records returned for a service query in a domain
   // [#next-free-field: 8]
   message DnsService {
     option (udpa.annotations.versioning).previous_message_type =
