@@ -979,6 +979,37 @@ TEST_F(DnsFilterTest, RawBufferTest) {
   Utils::verifyAddress(expected, answer);
 }
 
+TEST_F(DnsFilterTest, InvalidAnswersInQueryTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  const std::string domain("www.foo3.com");
+
+  // Answer count is non-zero in a query.
+  constexpr char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x01,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // Query record for
+      0x6f, 0x33, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  constexpr size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_, counters_);
+  EXPECT_FALSE(query_ctx_->parse_status_);
+  EXPECT_EQ(DNS_RESPONSE_CODE_FORMAT_ERROR, response_parser_->getQueryResponseCode());
+  EXPECT_EQ(0, query_ctx_->answers_.size());
+}
+
 TEST_F(DnsFilterTest, InvalidQueryNameTest) {
   InSequence s;
 
@@ -1008,8 +1039,93 @@ TEST_F(DnsFilterTest, InvalidQueryNameTest) {
   EXPECT_FALSE(query_ctx_->parse_status_);
   EXPECT_EQ(DNS_RESPONSE_CODE_FORMAT_ERROR, response_parser_->getQueryResponseCode());
 
-  // TODO(abaptiste): underflow stats
   EXPECT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+}
+
+TEST_F(DnsFilterTest, InvalidAnswerNameTest) {
+  InSequence s;
+
+  // In this buffer the name label is incorrect for the answer. The labels are separated
+  // by periods and not the segment length. The filter will indicate that the parsing failed
+  constexpr unsigned char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x81, 0x80,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x01,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x01,                               // Additional RRs
+      0x04, 0x69, 0x70, 0x76, 0x36, 0x02, 0x68, // Query record for
+      0x65, 0x03, 0x6e, 0x65, 0x74, 0x00,       // ipv6.he.net
+      0x00, 0x01,                               // Record Type
+      0x00, 0x01,                               // Record Class
+      0x69, 0x70, 0x76, 0x36, 0x2e, 0x68,       // Answer record for
+      0x65, 0x2e, 0x6e, 0x65, 0x74, 0x00,       // ipv6.he.net
+      0x00, 0x01,                               // Answer Record Type
+      0x00, 0x01,                               // Answer Record Class
+      0x00, 0x00, 0x01, 0x19,                   // Answer TTL
+      0x00, 0x04,                               // Answer Data Length
+      0x42, 0xdc, 0x02, 0x4b,                   // Answer IP Address
+      0x00,                                     // Additional RR (we do not parse this)
+      0x00, 0x29, 0x10, 0x00,                   // UDP Payload Size (4096)
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+
+  constexpr size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+
+  Network::UdpRecvData data{};
+  data.addresses_.peer_ = Network::Utility::parseInternetAddressAndPort("10.0.0.1:1000");
+  data.addresses_.local_ = listener_address_;
+  data.buffer_ = std::make_unique<Buffer::OwnedImpl>(dns_request, count);
+  data.receive_time_ = MonotonicTime(std::chrono::seconds(0));
+
+  query_ctx_ = response_parser_->createQueryContext(data, counters_);
+  EXPECT_FALSE(query_ctx_->parse_status_);
+
+  // We should have zero parsed answers
+  EXPECT_TRUE(query_ctx_->answers_.empty());
+}
+
+TEST_F(DnsFilterTest, InvalidQueryClassAndAnswerTypeTest) {
+  InSequence s;
+
+  // In this buffer the answer type is unsupported, and the query class is unsupported.
+  constexpr unsigned char dns_request[] = {
+      0x36, 0x6b,                               // Transaction ID
+      0x81, 0x80,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x01,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x01,                               // Additional RRs
+      0x04, 0x69, 0x70, 0x76, 0x36, 0x02, 0x68, // Query record for
+      0x65, 0x03, 0x6e, 0x65, 0x74, 0x00,       // ipv6.he.net
+      0x00, 0x01,                               // Record Type
+      0x00, 0x02,                               // Record Class
+      0x04, 0x69, 0x70, 0x76, 0x36, 0x02, 0x68, // Answer record for
+      0x65, 0x03, 0x6e, 0x65, 0x74, 0x00,       // ipv6.he.net
+      0x00, 0x17,                               // Answer Record Type
+      0x00, 0x01,                               // Answer Record Class
+      0x00, 0x00, 0x01, 0x19,                   // Answer TTL
+      0x00, 0x04,                               // Answer Data Length
+      0x42, 0xdc, 0x02, 0x4b,                   // Answer IP Address
+      0x00,                                     // Additional RR (we do not parse this)
+      0x00, 0x29, 0x10, 0x00,                   // UDP Payload Size (4096)
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+
+  constexpr size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+
+  Network::UdpRecvData data{};
+  data.addresses_.peer_ = Network::Utility::parseInternetAddressAndPort("10.0.0.1:1000");
+  data.addresses_.local_ = listener_address_;
+  data.buffer_ = std::make_unique<Buffer::OwnedImpl>(dns_request, count);
+  data.receive_time_ = MonotonicTime(std::chrono::seconds(0));
+
+  query_ctx_ = response_parser_->createQueryContext(data, counters_);
+  EXPECT_FALSE(query_ctx_->parse_status_);
+
+  // We should have zero parsed queries or answers
+  EXPECT_TRUE(query_ctx_->queries_.empty());
+  EXPECT_TRUE(query_ctx_->answers_.empty());
 }
 
 TEST_F(DnsFilterTest, InvalidQueryNameTest2) {
@@ -1097,6 +1213,39 @@ TEST_F(DnsFilterTest, InvalidQueryCountTest) {
       0x00, 0x00,                               // Additional RRs
       0x03, 0x77, 0x77, 0x77, 0x04, 0x66, 0x6f, // Query record for
       0x6f, 0x33, 0x03, 0x63, 0x6f, 0x6d, 0x00, // www.foo3.com
+      0x00, 0x01,                               // Query Type - A
+      0x00, 0x01,                               // Query Class - IN
+  };
+
+  constexpr size_t count = sizeof(dns_request) / sizeof(dns_request[0]);
+  const std::string query = Utils::buildQueryFromBytes(dns_request, count);
+
+  sendQueryFromClient("10.0.0.1:1000", query);
+
+  query_ctx_ = response_parser_->createQueryContext(udp_response_, counters_);
+  EXPECT_FALSE(query_ctx_->parse_status_);
+  EXPECT_EQ(DNS_RESPONSE_CODE_FORMAT_ERROR, response_parser_->getQueryResponseCode());
+
+  EXPECT_EQ(0, config_->stats().a_record_queries_.value());
+  EXPECT_EQ(1, config_->stats().downstream_rx_invalid_queries_.value());
+  EXPECT_EQ(0, query_ctx_->answers_.size());
+}
+
+TEST_F(DnsFilterTest, InvalidNameLabelTest) {
+  InSequence s;
+
+  setup(forward_query_off_config);
+  // In this buffer the name label is not formatted as the RFC specifies. The
+  // label separators are periods and not the label length
+  constexpr char dns_request[] = {
+      0x36, 0x6f,                               // Transaction ID
+      0x01, 0x20,                               // Flags
+      0x00, 0x01,                               // Questions
+      0x00, 0x00,                               // Answers
+      0x00, 0x00,                               // Authority RRs
+      0x00, 0x00,                               // Additional RRs
+      0x77, 0x77, 0x77, 0x2e, 0x66, 0x6f, 0x6f, // Query record for
+      0x33, 0x2e, 0x63, 0x6f, 0x6d, 0x00,       // www.foo3.com
       0x00, 0x01,                               // Query Type - A
       0x00, 0x01,                               // Query Class - IN
   };

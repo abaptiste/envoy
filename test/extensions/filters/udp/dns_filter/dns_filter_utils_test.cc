@@ -13,10 +13,7 @@ namespace DnsFilter {
 namespace Utils {
 namespace {
 
-class DnsFilterUtilsTest : public testing::Test {
-public:
-  DnsFilterUtilsTest(){};
-};
+class DnsFilterUtilsTest : public testing::Test {};
 
 TEST_F(DnsFilterUtilsTest, UtilsProtoNameTest) {
   std::map<uint16_t, std::string> proto_name_test = {

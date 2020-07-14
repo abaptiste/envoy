@@ -669,6 +669,7 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
   // Each response must have DNS flags, which spans 4 bytes. Account for them immediately so
   // that we can adjust the number of returned answers to remain under the limit
   uint64_t total_buffer_size = sizeof(DnsHeaderFlags);
+  uint16_t touched_answers = 0;
   uint16_t serialized_answers = 0;
   uint16_t serialized_queries = 0;
   uint16_t serialized_authority_rrs = 0;
@@ -698,47 +699,36 @@ void DnsMessageParser::buildResponseBuffer(DnsQueryContextPtr& query_context,
     // Randomize the starting index if we have more than 8 records
     size_t index = num_answers > MAX_RETURNED_RECORDS ? rng_.random() % num_answers : 0;
 
-    while (serialized_answers < num_answers) {
+    while (serialized_answers < num_answers && touched_answers < num_answers) {
       const auto answer = std::next(answers.begin(), (index++ % num_answers));
-      // Query names are limited to 255 characters. Since we are using ares to decode the
-      // encoded names, we should not end up with a non-conforming name here.
+      ++touched_answers;
+
+      // Query names are limited to 255 characters. Since we are using c-ares to decode the
+      // encoded query names, we should not end up with a non-conforming name here.
       //
       // See Section 2.3.4 of https://tools.ietf.org/html/rfc1035
-      if (query->name_.size() > MAX_DNS_NAME_SIZE) {
-        query_context->counters_.record_name_overflow.inc();
-        ENVOY_LOG(debug,
-                  "Query name '{}' is longer than the maximum permitted length. Skipping "
-                  "serialization",
-                  query->name_);
-        continue;
-      }
+      RELEASE_ASSERT(query->name_.size() < MAX_DNS_NAME_SIZE,
+                     "Unable to serialize invalid query name");
 
-      // Only serialize answer records whose names match the query
-      if (answer->first != query->name_) {
-        continue;
-      }
+      // Serialize answer records whose names and types match the query
+      if (answer->first == query->name_ && answer->second->type_ == query->type_) {
+        Buffer::OwnedImpl serialized_answer;
+        if (!answer->second->serialize(serialized_answer)) {
+          ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
+          continue;
+        }
 
-      // Only serialize answer records whose types match the query
-      if (answer->second->type_ != query->type_) {
-        continue;
-      }
+        const uint64_t serialized_answer_length = serialized_answer.length();
+        if ((total_buffer_size + serialized_answer_length) > MAX_DNS_RESPONSE_SIZE) {
+          break;
+        }
 
-      Buffer::OwnedImpl serialized_answer;
-      if (!answer->second->serialize(serialized_answer)) {
-        ENVOY_LOG(debug, "Unable to serialize answer record for {}", query->name_);
-        continue;
-      }
+        total_buffer_size += serialized_answer_length;
+        answer_buffer.add(serialized_answer);
 
-      const uint64_t serialized_answer_length = serialized_answer.length();
-      if ((total_buffer_size + serialized_answer_length) > MAX_DNS_RESPONSE_SIZE) {
-        break;
-      }
-
-      total_buffer_size += serialized_answer_length;
-      answer_buffer.add(serialized_answer);
-
-      if (++serialized_answers == MAX_RETURNED_RECORDS) {
-        break;
+        if (++serialized_answers == MAX_RETURNED_RECORDS) {
+          break;
+        }
       }
     }
 
