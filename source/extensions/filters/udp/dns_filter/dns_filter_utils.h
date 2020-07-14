@@ -37,7 +37,7 @@ absl::string_view getProtoFromName(const absl::string_view name);
  * domain fields.
  *
  * A DNS service record name must have the protocol and name labels begin with underscores. This
- * function validates the input fields and concatentates them to form the full name
+ * function validates the input fields and concatenates them to form the full name
  */
 std::string buildServiceName(const std::string& name, const std::string& proto,
                              const std::string& domain);
