@@ -84,8 +84,8 @@ DnsFilterEnvoyConfig::DnsFilterEnvoyConfig(
         const uint16_t port = dns_service.port();
 
         // Generate the full name for the DNS service.
-        const std::string full_service_name = DnsSrvRecord::buildServiceName(
-            dns_service.service_name(), proto, virtual_domain.name());
+        const std::string full_service_name =
+            Utils::buildServiceName(dns_service.service_name(), proto, virtual_domain.name());
 
         if (full_service_name.empty()) {
           ENVOY_LOG(

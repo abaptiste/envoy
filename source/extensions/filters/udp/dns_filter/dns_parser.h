@@ -33,7 +33,7 @@ constexpr uint16_t DNS_RESPONSE_CODE_NOT_IMPLEMENTED = 4;
  */
 class BaseDnsRecord {
 public:
-  BaseDnsRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
+  BaseDnsRecord(const absl::string_view rec_name, const uint16_t rec_type, const uint16_t rec_class)
       : name_(rec_name), type_(rec_type), class_(rec_class) {}
   virtual ~BaseDnsRecord() = default;
   bool serializeName(Buffer::OwnedImpl& output);
@@ -44,7 +44,7 @@ public:
   const uint16_t class_;
 
 protected:
-  bool serializeSpecificName(Buffer::OwnedImpl& output, const std::string& name);
+  bool serializeSpecificName(Buffer::OwnedImpl& output, const absl::string_view name);
 };
 
 /**
@@ -53,7 +53,8 @@ protected:
  */
 class DnsQueryRecord : public BaseDnsRecord {
 public:
-  DnsQueryRecord(const std::string& rec_name, const uint16_t rec_type, const uint16_t rec_class)
+  DnsQueryRecord(const absl::string_view rec_name, const uint16_t rec_type,
+                 const uint16_t rec_class)
       : BaseDnsRecord(rec_name, rec_type, rec_class) {}
   bool serialize(Buffer::OwnedImpl& output) override;
 
@@ -71,8 +72,9 @@ using AddressConstPtrVec = std::vector<Network::Address::InstanceConstSharedPtr>
  */
 class DnsAnswerRecord : public BaseDnsRecord {
 public:
-  DnsAnswerRecord(const std::string& query_name, const uint16_t rec_type, const uint16_t rec_class,
-                  const std::chrono::seconds ttl, Network::Address::InstanceConstSharedPtr ipaddr)
+  DnsAnswerRecord(const absl::string_view query_name, const uint16_t rec_type,
+                  const uint16_t rec_class, const std::chrono::seconds ttl,
+                  Network::Address::InstanceConstSharedPtr ipaddr)
       : BaseDnsRecord(query_name, rec_type, rec_class), ttl_(ttl), ip_addr_(ipaddr) {}
   bool serialize(Buffer::OwnedImpl& output) override;
 
@@ -90,57 +92,15 @@ using DnsAnswerMap = std::unordered_multimap<std::string, DnsAnswerRecordPtr>;
  */
 class DnsSrvRecord : public DnsAnswerRecord {
 public:
-  DnsSrvRecord(const std::string& service_name, const std::string& proto,
+  DnsSrvRecord(const absl::string_view service_name, const absl::string_view proto,
                const std::chrono::seconds ttl, const uint16_t priority, const uint16_t weight,
-               const uint16_t port, const std::string& target,
+               const uint16_t port, const absl::string_view target,
                const uint16_t rec_type = DNS_RECORD_TYPE_SRV,
                const uint16_t rec_class = DNS_RECORD_CLASS_IN)
       : DnsAnswerRecord(service_name, rec_type, rec_class, ttl, nullptr), proto_(proto),
         priority_(priority), weight_(weight), port_(port), target_(target) {}
 
   bool serialize(Buffer::OwnedImpl& output) override;
-
-  static std::string buildServiceName(const std::string& name, const std::string& proto,
-                                      const std::string& domain) {
-    if (name.empty() || proto.empty() || domain.empty()) {
-      return EMPTY_STRING;
-    }
-
-    std::string result{};
-    if (name[0] != '_') {
-      result += "_";
-    }
-    result += name + ".";
-    if (proto[0] != '_') {
-      result += "_";
-    }
-    result += proto + '.' + domain;
-    return result;
-  }
-
-  static absl::string_view getServiceFromName(const absl::string_view name) {
-    const size_t offset = name.find_first_of('.');
-    if (offset != std::string::npos && offset < name.size()) {
-      size_t start = 0;
-      if (name[start] == '_') {
-        return name.substr(++start, offset - 1);
-      }
-    }
-    return EMPTY_STRING;
-  }
-
-  static absl::string_view getProtoFromName(const absl::string_view name) {
-    size_t start = name.find_first_of('.');
-    if (start != std::string::npos && ++start < name.size() - 1) {
-      if (name[start] == '_') {
-        const size_t offset = name.find_first_of('.', ++start);
-        if (start != std::string::npos && offset < name.size()) {
-          return name.substr(start, offset - start);
-        }
-      }
-    }
-    return EMPTY_STRING;
-  }
 
   std::string proto_;
   uint16_t priority_;
@@ -273,7 +233,7 @@ public:
   DnsQueryRecordPtr parseDnsQueryRecord(const Buffer::InstancePtr& buffer, uint64_t& offset);
 
   struct DnsAnswerCtx {
-    DnsAnswerCtx(const Buffer::InstancePtr& buffer, const std::string& record_name,
+    DnsAnswerCtx(const Buffer::InstancePtr& buffer, const absl::string_view record_name,
                  const uint16_t record_type, const uint16_t record_class,
                  const uint16_t available_bytes, const uint16_t data_length, const uint32_t ttl,
                  uint64_t& offset)
@@ -282,7 +242,7 @@ public:
           ttl_(ttl), offset_(offset) {}
 
     const Buffer::InstancePtr& buffer_;
-    const std::string& record_name_;
+    const std::string record_name_;
     const uint16_t record_type_;
     const uint16_t record_class_;
     const uint16_t available_bytes_;

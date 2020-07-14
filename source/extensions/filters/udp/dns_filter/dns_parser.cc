@@ -14,7 +14,7 @@ namespace Extensions {
 namespace UdpFilters {
 namespace DnsFilter {
 
-bool BaseDnsRecord::serializeSpecificName(Buffer::OwnedImpl& output, const std::string& name) {
+bool BaseDnsRecord::serializeSpecificName(Buffer::OwnedImpl& output, const absl::string_view name) {
   // Iterate over a name e.g. "www.domain.com" once and produce a buffer containing each name
   // segment prefixed by its length
   static constexpr char SEPARATOR = '.';
@@ -373,7 +373,7 @@ DnsSrvRecordPtr DnsMessageParser::parseDnsSrvRecord(DnsAnswerCtx& ctx) {
   available_bytes -= sizeof(uint16_t);
 
   const std::string target_name = parseDnsNameRecord(ctx.buffer_, available_bytes, ctx.offset_);
-  const absl::string_view proto = DnsSrvRecord::getProtoFromName(ctx.record_name_);
+  const absl::string_view proto = Utils::getProtoFromName(ctx.record_name_);
 
   if (proto.empty() || target_name.empty()) {
     ENVOY_LOG(debug, "Could not parse protocol[{}] or target[{}] from SRV record", proto,

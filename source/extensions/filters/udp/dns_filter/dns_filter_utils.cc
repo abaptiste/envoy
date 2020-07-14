@@ -38,6 +38,48 @@ std::string getProtoName(const DnsTable::DnsServiceProtocol& protocol) {
   return proto;
 }
 
+absl::string_view getServiceFromName(const absl::string_view name) {
+  const size_t offset = name.find_first_of('.');
+  if (offset != std::string::npos && offset < name.size()) {
+    size_t start = 0;
+    if (name[start] == '_') {
+      return name.substr(++start, offset - 1);
+    }
+  }
+  return EMPTY_STRING;
+}
+
+absl::string_view getProtoFromName(const absl::string_view name) {
+  size_t start = name.find_first_of('.');
+  if (start != std::string::npos && ++start < name.size() - 1) {
+    if (name[start] == '_') {
+      const size_t offset = name.find_first_of('.', ++start);
+      if (start != std::string::npos && offset < name.size()) {
+        return name.substr(start, offset - start);
+      }
+    }
+  }
+  return EMPTY_STRING;
+}
+
+std::string buildServiceName(const std::string& name, const std::string& proto,
+                             const std::string& domain) {
+  if (name.empty() || proto.empty() || domain.empty()) {
+    return EMPTY_STRING;
+  }
+
+  std::string result{};
+  if (name[0] != '_') {
+    result += "_";
+  }
+  result += name + ".";
+  if (proto[0] != '_') {
+    result += "_";
+  }
+  result += proto + '.' + domain;
+  return result;
+}
+
 } // namespace Utils
 } // namespace DnsFilter
 } // namespace UdpFilters
